@@ -1,0 +1,59 @@
+# KSAgent 配置文件
+
+# LLM 配置（Qwen3-VL-4B vLLM 服务）
+llm:
+  base_url: "http://127.0.0.1:8002/v1"
+  model: "Qwen3-VL-4B-Instruct"
+  api_key: "EMPTY"
+  temperature: 0.2
+  max_tokens: 2048
+  timeout: 60
+
+# MCP 配置（ksipms 平台业务接口）
+mcp:
+  enabled: false  # 阶段 1 先 mock，阶段 2 再对接真实端点
+  endpoint: "http://ksipms.internal:9000/mcp"
+  timeout: 30
+  tools:
+    - name: "query_alarms"
+      description: "查询告警记录，支持按日期、类型、摄像机筛选"
+      parameters:
+        date: "日期 YYYY-MM-DD"
+        alarm_type: "告警类型（可选）：smoking/no_helmet/phone/no_mask"
+        camera_id: "摄像机 ID（可选）"
+    - name: "query_video"
+      description: "检索录像片段"
+      parameters:
+        camera_id: "摄像机 ID"
+        start_time: "开始时间 YYYY-MM-DD HH:MM:SS"
+        end_time: "结束时间 YYYY-MM-DD HH:MM:SS"
+    - name: "query_person"
+      description: "查询人员信息"
+      parameters:
+        person_id: "人员 ID 或姓名"
+
+# RAG 知识库（可选，阶段 3 接入）
+rag:
+  enabled: false
+  ragflow_url: "http://ragflow.internal:8080"
+  dataset_id: "safety_regulations"
+  top_k: 3
+
+# 数据库（会话历史、任务日志）
+database:
+  enabled: false  # 阶段 1 不持久化，阶段 4 再开启
+  url: "mysql+aiomysql://ksagent:password@localhost:3306/ksagent"
+  pool_size: 10
+  echo: false
+
+# FastAPI 服务
+server:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+  log_level: "info"
+
+# 日志
+logging:
+  level: "INFO"
+  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
