@@ -1,189 +1,206 @@
-"""
-元智能体主运行脚本
+"""Agent-of-Agent 主流程：spec → Claude 生成 prompt → 模板生成代码 → 跑测试 → 评估 → 落盘。
 
-整合 prompt 生成、代码生成、执行、评估、反馈分析的完整流程
+CLI:
+  python run_meta_agent.py --spec templates/AGENT_SPEC_EXAMPLE.md
+  python run_meta_agent.py --spec templates/AGENT_SPEC_EXAMPLE.md --dry-run
+
+输出落到 artifacts/<job_id>/，与 RULES §6 token 预算配合。
 """
+from __future__ import annotations
+
+import argparse
 import json
+import os
 import sys
+import traceback
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any
 
-# 添加 meta_agent 到路径
-sys.path.insert(0, str(Path(__file__).parent))
+# 让本脚本以 `python run_meta_agent.py` 直接运行时也能 import
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from meta_agent.prompt_generator import PromptGenerator
 from meta_agent.code_generator import CodeGenerator
-from meta_agent.executor import Executor
 from meta_agent.evaluator import Evaluator
+from meta_agent.executor import Executor
 from meta_agent.feedback_analyzer import FeedbackAnalyzer
+from meta_agent.llm_client import BudgetExceeded, ClaudeClient
+from meta_agent.prompt_generator import PromptGenerator
+from meta_agent.spec_parser import parse_spec_file
 
 
-def run_meta_agent(
-    task: Dict[str, Any],
-    max_iterations: int = 5,
-    target_score: float = 0.8,
-    save_artifacts: bool = True
-) -> Dict[str, Any]:
-    """运行元智能体，自动生成并优化子 Agent
+PROJECT_ROOT = Path(__file__).resolve().parent
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+LOGS_DIR = PROJECT_ROOT / "logs" / "jobs"
 
-    Args:
-        task: 任务定义
-        max_iterations: 最大迭代次数
-        target_score: 目标得分
-        save_artifacts: 是否保存中间产物
 
-    Returns:
-        生成结果
-    """
-    print("=" * 60)
-    print("🤖 元智能体启动")
-    print("=" * 60)
-    print(f"任务: {task.get('name')}")
-    print(f"描述: {task.get('description')}")
-    print(f"工具: {', '.join([t if isinstance(t, str) else t.get('name', '') for t in task.get('tools', [])])}")
-    print(f"测试用例数: {len(task.get('test_cases', []))}")
-    print(f"目标得分: {target_score}")
-    print("=" * 60)
-    print()
+def _new_job_id(agent_name: str) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{agent_name}_{ts}_{uuid.uuid4().hex[:6]}"
 
-    # 初始化组件
-    prompt_gen = PromptGenerator()
+
+def run_pipeline(spec_path: str | Path, *, dry_run: bool = False,
+                 max_iterations: int | None = None,
+                 job_id: str | None = None) -> dict:
+    spec_path = Path(spec_path).resolve()
+    if not spec_path.exists():
+        raise FileNotFoundError(spec_path)
+    spec = parse_spec_file(spec_path)
+    task = spec.asdict()
+
+    job_id = job_id or _new_job_id(spec.name)
+    out_dir = ARTIFACTS_DIR / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "spec.md").write_text(spec.raw_md, encoding="utf-8")
+
+    log_path = out_dir / "claude_log.jsonl"
+    pipeline_log = out_dir / "pipeline.log"
+
+    def _plog(msg: str):
+        line = f"[{datetime.now().isoformat(timespec='seconds')}] {msg}"
+        print(line, flush=True)
+        with pipeline_log.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    _plog(f"job_id={job_id}")
+    _plog(f"spec={spec_path}")
+    _plog(f"agent_name={spec.name} v{spec.version}")
+    _plog(f"tools={[t['name'] for t in spec.tools]}")
+    _plog(f"test_cases={len(spec.test_cases)}")
+
+    # 初始化 Claude（dry_run 时跳过）
+    client = None
+    if not dry_run:
+        budget = spec.token_budget
+        os.environ.setdefault("TOKEN_BUDGET_INPUT",  str(budget.get("max_input_tokens", 50000)))
+        os.environ.setdefault("TOKEN_BUDGET_OUTPUT", str(budget.get("max_output_tokens", 20000)))
+        try:
+            client = ClaudeClient(log_path=log_path)
+            _plog(f"claude model={client.model} budget=[in:{client.budget_input},out:{client.budget_output}]")
+        except SystemExit as e:
+            _plog(f"FATAL: {e}")
+            return _save_failure(out_dir, str(e), job_id)
+
+    prompt_gen = PromptGenerator(client=client)
     code_gen = CodeGenerator()
-    executor = Executor(timeout=60)
-    evaluator = Evaluator()
-    analyzer = FeedbackAnalyzer()
+    executor = Executor(timeout=60, project_root=PROJECT_ROOT)
+    feedback = FeedbackAnalyzer(client=client)
+    evaluator = Evaluator(acceptance=spec.acceptance)
 
-    # 初始生成
-    prompt = prompt_gen.generate(task)
-    best_prompt = prompt
-    best_code = None
-    best_score = 0.0
-    best_metrics = {}
+    target = spec.acceptance.get("overall_score", 0.7)
+    max_iter = max_iterations or int(spec.token_budget.get("max_iterations", 1))
+    _plog(f"target_score={target} max_iterations={max_iter}")
 
-    for iteration in range(1, max_iterations + 1):
-        print(f"\n[第 {iteration} 轮迭代]")
-        print("-" * 60)
+    try:
+        prompt = prompt_gen.generate(task)
+    except BudgetExceeded as e:
+        _plog(f"BudgetExceeded: {e}")
+        return _save_failure(out_dir, str(e), job_id, reason="budget_exhausted")
 
-        # 1. 生成代码
-        print("1️⃣  生成代码...")
-        code = code_gen.generate(prompt, task.get("tools", []), task.get("name", "agent"))
+    best = {"score": -1.0, "prompt": prompt, "code": "", "metrics": {}, "test_report": None,
+            "iteration": 0}
 
-        # 2. 执行测试
-        print("2️⃣  执行测试...")
-        test_result = executor.run_tests(code, task.get("test_cases", []))
+    for it in range(1, max_iter + 1):
+        _plog(f"--- iter {it} ---")
+        code = code_gen.generate(prompt, spec.tools, spec.name,
+                                 data_source=_first_data_source(spec.tools, spec.data_access),
+                                 project_root=str(PROJECT_ROOT))
+        # 立即落盘当前 iter 的代码（便于调试）
+        (out_dir / f"agent_code.iter{it}.py").write_text(code, encoding="utf-8")
+        (out_dir / f"system_prompt.iter{it}.txt").write_text(prompt, encoding="utf-8")
 
-        # 3. 评估
-        print("3️⃣  评估性能...")
-        metrics = evaluator.evaluate(test_result)
+        report = executor.run_tests(code, spec.test_cases, agent_name=spec.name)
+        metrics = evaluator.evaluate(report)
+        _plog(f"metrics={metrics}")
+        _plog(f"pass_rate={report['passed']}/{report['total']}")
 
-        print(f"   工具准确率: {metrics['tool_accuracy']:.1%}")
-        print(f"   执行成功率: {metrics['execution_success']:.1%}")
-        print(f"   综合得分: {metrics['overall_score']:.1%}")
+        if metrics["overall_score"] > best["score"]:
+            best.update({"score": metrics["overall_score"],
+                         "prompt": prompt, "code": code,
+                         "metrics": metrics, "test_report": report,
+                         "iteration": it})
 
-        # 4. 更新最佳结果
-        if metrics['overall_score'] > best_score:
-            best_score = metrics['overall_score']
-            best_prompt = prompt
-            best_code = code
-            best_metrics = metrics
-            print(f"   ✅ 新最佳得分: {best_score:.1%}")
-
-        # 5. 判断是否达标
-        if evaluator.meets_threshold(metrics, target_score):
-            print(f"\n🎉 达到目标得分 {target_score:.1%}，迭代结束！")
+        if evaluator.meets_threshold(metrics) and metrics["overall_score"] >= target:
+            _plog(f"达标 (overall={metrics['overall_score']} >= {target})")
             break
 
-        # 6. 分析反馈
-        print("4️⃣  分析失败原因...")
-        feedback = analyzer.analyze(test_result)
-        print(f"   改进建议:\n{feedback}")
+        if it < max_iter:
+            try:
+                fb = feedback.analyze(report)
+                _plog(f"feedback:\n{fb}")
+                prompt = prompt_gen.optimize(prompt, fb, task)
+            except BudgetExceeded as e:
+                _plog(f"BudgetExceeded mid-iter: {e}")
+                break
+            except Exception as e:
+                _plog(f"feedback/optimize 失败: {e}; 提前结束")
+                break
 
-        # 7. 优化 prompt
-        if iteration < max_iterations:
-            print("5️⃣  优化 Prompt...")
-            prompt = prompt_gen.optimize(prompt, feedback)
+    # 落盘 best
+    (out_dir / "agent_code.py").write_text(best["code"], encoding="utf-8")
+    (out_dir / "system_prompt.txt").write_text(best["prompt"], encoding="utf-8")
+    (out_dir / "metrics.json").write_text(
+        json.dumps(best["metrics"], ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "test_report.json").write_text(
+        json.dumps(best["test_report"], ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 保存最佳版本
-    if save_artifacts and best_code:
-        artifacts_dir = Path(__file__).parent / "artifacts"
-        artifacts_dir.mkdir(exist_ok=True)
-
-        agent_name = task.get("name", "agent")
-
-        # 保存代码
-        code_file = artifacts_dir / "generated_agents" / f"{agent_name}.py"
-        code_file.parent.mkdir(exist_ok=True)
-        code_file.write_text(best_code, encoding="utf-8")
-
-        # 保存 prompt
-        prompt_file = artifacts_dir / "best_prompts" / f"{agent_name}_prompt.txt"
-        prompt_file.parent.mkdir(exist_ok=True)
-        prompt_file.write_text(best_prompt, encoding="utf-8")
-
-        # 保存指标
-        metrics_file = artifacts_dir / "test_results" / f"{agent_name}_metrics.json"
-        metrics_file.parent.mkdir(exist_ok=True)
-        metrics_file.write_text(json.dumps({
-            "task": task,
-            "metrics": best_metrics,
-            "score": best_score
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        print(f"\n💾 最佳版本已保存:")
-        print(f"   代码: {code_file}")
-        print(f"   Prompt: {prompt_file}")
-        print(f"   指标: {metrics_file}")
-
-    print("\n" + "=" * 60)
-    print(f"🏁 元智能体执行完成")
-    print(f"   最佳得分: {best_score:.1%}")
-    print(f"   迭代次数: {iteration}")
-    print("=" * 60)
-
-    return {
-        "success": best_score >= target_score,
-        "score": best_score,
-        "metrics": best_metrics,
-        "iterations": iteration,
-        "code": best_code,
-        "prompt": best_prompt
+    register = {
+        "job_id": job_id,
+        "agent_name": spec.name,
+        "version": spec.version,
+        "score": best["score"],
+        "metrics": best["metrics"],
+        "iteration": best["iteration"],
+        "produced_at": datetime.now(timezone.utc).isoformat(),
+        "spec_path": str(spec_path),
+        "code_path": str(out_dir / "agent_code.py"),
+        "data_source": _first_data_source(spec.tools, spec.data_access),
+        "claude_usage": client.usage.asdict() if client else None,
+        "passed_acceptance": evaluator.meets_threshold(best["metrics"]),
     }
+    (out_dir / "REGISTER.json").write_text(
+        json.dumps(register, ensure_ascii=False, indent=2), encoding="utf-8")
+    _plog(f"DONE -> {out_dir}")
+    return register
+
+
+def _first_data_source(tools: list, data_access: dict) -> str:
+    for t in tools:
+        ds = (t.get("data_source") or "").strip()
+        if ds:
+            return ds
+    db = data_access.get("数据库") or data_access.get("db")
+    path = data_access.get("路径") or data_access.get("path") or "data/ksipms_dev.db"
+    if db:
+        return f"{db}:{path}"
+    return "sqlite:data/ksipms_dev.db"
+
+
+def _save_failure(out_dir: Path, err: str, job_id: str, reason: str = "error") -> dict:
+    register = {"job_id": job_id, "passed_acceptance": False,
+                "score": -1, "error": err, "reason": reason,
+                "produced_at": datetime.now(timezone.utc).isoformat()}
+    (out_dir / "REGISTER.json").write_text(
+        json.dumps(register, ensure_ascii=False, indent=2), encoding="utf-8")
+    return register
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--spec", required=True, help="path to AGENT_SPEC.md")
+    ap.add_argument("--dry-run", action="store_true", help="don't call Claude (template fallback)")
+    ap.add_argument("--max-iterations", type=int, default=None)
+    ap.add_argument("--job-id", default=None)
+    args = ap.parse_args()
+    try:
+        register = run_pipeline(args.spec, dry_run=args.dry_run,
+                                max_iterations=args.max_iterations,
+                                job_id=args.job_id)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(2)
+    print(json.dumps(register, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    # 示例任务：告警查询 Agent
-    task = {
-        "name": "alarm_query_agent",
-        "description": "查询安全生产平台的告警记录，支持按日期、类型筛选",
-        "tools": [
-            {
-                "name": "query_alarms",
-                "description": "查询告警记录",
-                "parameters": {
-                    "date": "日期 YYYY-MM-DD",
-                    "alarm_type": "告警类型（可选）：smoking/no_helmet/phone/no_mask"
-                }
-            }
-        ],
-        "test_cases": [
-            {
-                "input": "今天发生了哪几种告警？",
-                "expected_tool": "query_alarms"
-            },
-            {
-                "input": "查询2026-06-01的抽烟告警",
-                "expected_tool": "query_alarms"
-            },
-            {
-                "input": "最近有多少次未戴安全帽的告警？",
-                "expected_tool": "query_alarms"
-            }
-        ]
-    }
-
-    result = run_meta_agent(task, max_iterations=5, target_score=0.8)
-
-    if result["success"]:
-        print("\n✅ 任务成功完成！")
-    else:
-        print(f"\n⚠️  未达到目标得分，当前最佳: {result['score']:.1%}")
+    main()

@@ -1,0 +1,98 @@
+{
+  "passed": 3,
+  "failed": 0,
+  "total": 3,
+  "success_rate": 1.0,
+  "details": [
+    {
+      "input": "今天发生了哪些告警？",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "date": "<TODAY>"
+      },
+      "expected_output_contains": "告警",
+      "passed": true,
+      "reasons": [],
+      "agent_output_preview": "为查询「今天发生了哪些告警？」, 我执行了以下步骤：\n1. query_alarms: 共 0 条告警 []",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-03"
+          },
+          "reason": "根据用户查询‘今天’，使用当前UTC日期2026-06-03作为查询日期，不指定告警类型和摄像头，以获取所有告警记录。"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-03"
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "input": "查询昨天的抽烟告警",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "alarm_type": "smoking"
+      },
+      "expected_output_contains": "smoking",
+      "passed": true,
+      "reasons": [],
+      "agent_output_preview": "为查询「查询昨天的抽烟告警」, 我执行了以下步骤：\n1. query_alarms: 共 2 条告警 [smoking=2]",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-02",
+            "alarm_type": "smoking"
+          },
+          "reason": "根据用户查询需求，提取昨天日期和抽烟告警类型，调用告警查询工具"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-02",
+            "alarm_type": "smoking"
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "input": "最近未戴安全帽的告警",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "alarm_type": "no_helmet"
+      },
+      "expected_output_contains": "helmet",
+      "passed": true,
+      "reasons": [],
+      "agent_output_preview": "为查询「最近未戴安全帽的告警」, 我执行了以下步骤：\n1. query_alarms: 共 29 条告警 [no_helmet=29]",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "alarm_type": "no_helmet"
+          },
+          "reason": "用户查询最近未戴安全帽的告警，根据别名映射将'未戴安全帽'转换为标准alarm_type 'no_helmet'，日期未指定，因此不传date参数"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "alarm_type": "no_helmet"
+          },
+          "error": null
+        }
+      ]
+    }
+  ],
+  "error": null
+}

@@ -1,148 +1,128 @@
-"""
-元提示词生成器
+"""通过 Claude 生成 LangGraph Agent 的 system prompt。
 
-根据任务描述和工具定义，生成 LangGraph Agent 的 System Prompt
+- 不再硬编码模板，而是把 spec 与"如何写好 LangGraph Agent prompt"的元提示一起送给 Claude
+- 失败重写策略：把上一轮 prompt + 失败摘要给 Claude，让它**重写**整段 prompt（不是追加）
 """
-from typing import Dict, List, Any
+from __future__ import annotations
+
+import json
+import textwrap
+from typing import Any
+
+from .llm_client import ClaudeClient
+
+
+META_PROMPT_GENERATE = textwrap.dedent("""
+    You are an expert prompt engineer designing system prompts for LangGraph Agents.
+
+    Output rules:
+    - Output ONLY the system prompt text. No preamble, no markdown fences, no commentary.
+    - Write in Chinese (Simplified) because users are Chinese.
+    - The prompt MUST tell the agent to output a JSON object with `plan` field.
+    - `plan` is a list of `{"task": <tool_name>, "args": <object>, "reason": <string>}`.
+    - Tool names MUST be exactly from the provided tools list. Reject hallucinated tools.
+    - For date arguments use `YYYY-MM-DD` format; "today" must be resolved by the agent caller (LLM doesn't know today).
+    - Cover: when to call the tool, how to extract args from user input (with synonym mapping if relevant), what to do if input is ambiguous.
+    - Keep it concise (under 600 Chinese characters).
+""").strip()
+
+
+META_PROMPT_OPTIMIZE = textwrap.dedent("""
+    You are an expert prompt engineer. The previous system prompt produced failures on test cases.
+
+    Output rules:
+    - Output ONLY the rewritten full system prompt. Do NOT just append rules.
+    - Write in Chinese (Simplified).
+    - Address every failure pattern explicitly.
+    - Preserve the JSON `plan` output contract.
+""").strip()
 
 
 class PromptGenerator:
-    """元提示词生成器"""
+    """走 Claude 生成与优化 system prompt。"""
 
-    def __init__(self, prompt_library_path: str = None):
-        """初始化
+    def __init__(self, client: ClaudeClient | None = None):
+        self.client = client
 
-        Args:
-            prompt_library_path: prompt 模板库路径（可选）
-        """
-        self.prompt_library_path = prompt_library_path
+    def generate(self, task: dict[str, Any]) -> str:
+        """根据 task dict 生成 system prompt。"""
+        if self.client is None:
+            return self._fallback_template(task)
 
-    def generate(self, task: Dict[str, Any]) -> str:
-        """生成 system prompt
+        user = self._format_task_for_claude(task)
+        return self.client.call(
+            system=META_PROMPT_GENERATE,
+            user=user,
+            max_tokens=1500,
+            temperature=0.4,
+            tag="prompt_generate",
+        ).strip()
 
-        Args:
-            task: 任务定义，包含：
-                - name: Agent 名称
-                - description: 任务描述
-                - tools: 可用工具列表
-                - test_cases: 测试用例（可选）
+    def optimize(self, prev_prompt: str, feedback: str, task: dict[str, Any]) -> str:
+        """根据失败反馈重写 system prompt。"""
+        if self.client is None:
+            return prev_prompt + f"\n\n# 注意事项（自动）\n{feedback}\n"
 
-        Returns:
-            生成的 system prompt
-        """
-        name = task.get("name", "agent")
-        description = task.get("description", "")
-        tools = task.get("tools", [])
+        user = textwrap.dedent(f"""
+            ## Task spec
+            {self._format_task_for_claude(task)}
 
-        # 构建工具列表描述
-        tools_desc = self._format_tools(tools)
+            ## Previous system prompt
+            ```
+            {prev_prompt}
+            ```
 
-        # 生成 prompt
-        prompt = f"""你是一个专业的任务执行智能体：{name}
+            ## Failures observed
+            {feedback}
 
-# 任务职责
-{description}
+            Please rewrite the system prompt fully.
+        """).strip()
+        return self.client.call(
+            system=META_PROMPT_OPTIMIZE,
+            user=user,
+            max_tokens=1800,
+            temperature=0.4,
+            tag="prompt_optimize",
+        ).strip()
 
-# 可用工具
-{tools_desc}
+    @staticmethod
+    def _format_task_for_claude(task: dict[str, Any]) -> str:
+        """把 task dict 压缩成一段简洁描述，避免无谓 token。"""
+        tools_lines = []
+        for t in task.get("tools", []):
+            params = ", ".join(f"{k}({v})" for k, v in t.get("parameters", {}).items())
+            tools_lines.append(f"- {t['name']}: {t.get('description','')} [params: {params}]")
+        scenarios = "\n".join(f"- {s}" for s in task.get("user_scenarios", []))
+        return textwrap.dedent(f"""
+            Agent name: {task.get('name','agent')}
+            Business goal: {task.get('description','')}
 
-# 工作流程
-1. 仔细分析用户的请求，理解其意图
-2. 将复杂任务拆解为可执行的步骤
-3. 按顺序调用合适的工具完成每个步骤
-4. 汇总结果，生成结构化的回复
+            User scenarios:
+            {scenarios or '- (none provided)'}
 
-# 规则
-- 只使用上述列出的工具，不要臆造不存在的工具
-- 工具参数必须从用户请求中提取或合理推断
-- 如果信息不足，主动询问用户
-- 返回的结果要清晰、准确、有条理
+            Available tools:
+            {chr(10).join(tools_lines) or '- (no tools)'}
+        """).strip()
 
-# 输出格式
-始终以 JSON 格式返回执行计划：
-{{
-  "plan": [
-    {{"task": "tool_name", "args": {{"param": "value"}}, "reason": "为什么需要这一步"}},
-    ...
-  ]
-}}
-"""
-        return prompt
-
-    def _format_tools(self, tools: List[Any]) -> str:
-        """格式化工具列表
-
-        Args:
-            tools: 工具定义列表
-
-        Returns:
-            格式化的工具描述
-        """
-        if not tools:
-            return "（无可用工具）"
-
-        lines = []
-        for i, tool in enumerate(tools, 1):
-            if isinstance(tool, str):
-                # 简单字符串形式
-                lines.append(f"{i}. {tool}")
-            elif isinstance(tool, dict):
-                # 字典形式，包含详细定义
-                tool_name = tool.get("name", "unknown")
-                tool_desc = tool.get("description", "")
-                tool_params = tool.get("parameters", {})
-
-                lines.append(f"{i}. **{tool_name}**: {tool_desc}")
-
-                # 添加参数说明
-                if tool_params:
-                    lines.append("   参数：")
-                    for param_name, param_info in tool_params.items():
-                        param_desc = param_info if isinstance(param_info, str) else param_info.get("description", "")
-                        lines.append(f"   - {param_name}: {param_desc}")
-
-        return "\n".join(lines)
-
-    def optimize(self, prompt: str, feedback: str) -> str:
-        """根据反馈优化 prompt
-
-        Args:
-            prompt: 原始 prompt
-            feedback: 失败原因或改进建议
-
-        Returns:
-            优化后的 prompt
-        """
-        # MVP 版本：简单追加反馈到规则部分
-        optimization = f"\n\n# 注意事项（根据测试反馈优化）\n{feedback}\n"
-        return prompt + optimization
+    @staticmethod
+    def _fallback_template(task: dict[str, Any]) -> str:
+        """dry-run 兜底（不调 Claude），用于无 token 联调。"""
+        tool_names = [t["name"] for t in task.get("tools", [])]
+        return textwrap.dedent(f"""
+            你是一个任务执行智能体：{task.get('name','agent')}。
+            目标：{task.get('description','')}
+            可用工具：{', '.join(tool_names)}。
+            必须以 JSON 输出：{{"plan":[{{"task":"<tool>","args":{{}},"reason":"..."}}]}}
+            禁止使用列表外的工具。
+        """).strip()
 
 
 if __name__ == "__main__":
-    # 测试代码
-    generator = PromptGenerator()
-
+    # dry-run 自测
     task = {
         "name": "alarm_query_agent",
-        "description": "查询安全生产平台的告警记录",
-        "tools": [
-            {
-                "name": "query_alarms",
-                "description": "查询告警记录，支持按日期、类型、摄像机筛选",
-                "parameters": {
-                    "date": "日期 YYYY-MM-DD",
-                    "alarm_type": "告警类型（可选）：smoking/no_helmet/phone/no_mask",
-                    "camera_id": "摄像机 ID（可选）"
-                }
-            }
-        ]
+        "description": "查询告警",
+        "tools": [{"name": "query_alarms", "description": "查询告警", "parameters": {"date": "YYYY-MM-DD"}}],
+        "user_scenarios": ["用户问今天的告警"],
     }
-
-    prompt = generator.generate(task)
-    print(prompt)
-    print("\n" + "="*60 + "\n")
-
-    # 测试优化
-    feedback = "- 工具调用时，date 参数格式错误，应为 YYYY-MM-DD\n- 返回结果应包含告警数量统计"
-    optimized = generator.optimize(prompt, feedback)
-    print(optimized)
+    print(PromptGenerator()._fallback_template(task))

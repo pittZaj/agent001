@@ -19,6 +19,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from pydantic import BaseModel
 
 from utils import CONFIG
 from models import (
@@ -47,6 +48,44 @@ app.add_middleware(
 )
 
 
+# ===================== Agent-of-Agent 注册路由 =====================
+class GeneratedAgentChatRequest(BaseModel):
+    message: str
+    trace_id: str | None = None
+
+
+def _mount_generated_agents(app: FastAPI) -> None:
+    """启动时把 agent/agent/registry/agent_registry.json 中的 Agent 挂到 /agents/<name>/chat。"""
+    aoa_root = HERE / "agent"
+    if str(aoa_root) not in sys.path:
+        sys.path.insert(0, str(aoa_root))
+    try:
+        from registry import list_agents, load_agent_run  # type: ignore
+    except ImportError as e:
+        logger.warning(f"Agent-of-Agent 注册表未就绪: {e}")
+        return
+
+    for name, info in list_agents().items():
+        try:
+            run_fn = load_agent_run(name)
+        except Exception as e:
+            logger.warning(f"加载已发布 agent 失败 name={name}: {e}")
+            continue
+
+        route = info.get("route", f"/agents/{name}/chat")
+
+        async def _handler(req: GeneratedAgentChatRequest, _run=run_fn, _name=name):
+            try:
+                out = _run(req.message, trace_id=req.trace_id or "")
+            except Exception as e:
+                logger.exception(f"[generated-agent:{_name}] 失败")
+                raise HTTPException(status_code=500, detail=str(e))
+            return out
+
+        app.post(route, name=f"generated_{name}")(_handler)
+        logger.info(f"挂载已发布 Agent: {name} -> {route}")
+
+
 # ===================== 启动事件 =====================
 @app.on_event("startup")
 async def startup_event():
@@ -59,6 +98,9 @@ async def startup_event():
     # 预热：构建图
     get_graph()
     logger.info("LangGraph 图已就绪")
+
+    # 挂载所有已发布的 Agent-of-Agent 产出
+    _mount_generated_agents(app)
 
 
 # ===================== API 端点 =====================

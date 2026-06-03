@@ -1,0 +1,22 @@
+{
+  "job_id": "alarm_query_agent_20260603_093940_cef46c88",
+  "agent_name": "alarm_query_agent",
+  "version": "0.1.0",
+  "score": 1.0,
+  "metrics": {
+    "tool_accuracy": 1.0,
+    "execution_success": 1.0,
+    "case_pass_rate": 1.0,
+    "overall_score": 1.0
+  },
+  "iteration": 1,
+  "produced_at": "2026-06-03T01:40:13.648435+00:00",
+  "spec_path": "/mnt/data3/clip/LangGraph/agent/agent/templates/AGENT_SPEC_EXAMPLE.md",
+  "code_path": "/mnt/data3/clip/LangGraph/agent/agent/artifacts/alarm_query_agent_20260603_093940_cef46c88/agent_code.py",
+  "data_source": "sqlite:data/ksipms_dev.db.alarms",
+  "claude_usage": {
+    "input": 1,
+    "output": 571
+  },
+  "passed_acceptance": true
+}

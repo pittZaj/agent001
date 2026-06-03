@@ -1,0 +1,18 @@
+{
+  "alarm_query_agent": {
+    "version": "0.1.0",
+    "published_path": "/mnt/data3/clip/LangGraph/agent/agent/artifacts/published/alarm_query_agent_v0_1_0.py",
+    "module_name": "alarm_query_agent_v0_1_0",
+    "route": "/agents/alarm_query_agent/chat",
+    "registered_at": "2026-06-03T01:40:59.253578+00:00",
+    "metrics": {
+      "tool_accuracy": 1.0,
+      "execution_success": 1.0,
+      "case_pass_rate": 1.0,
+      "overall_score": 1.0
+    },
+    "score": 1.0,
+    "source_job_id": "alarm_query_agent_20260603_093940_cef46c88",
+    "data_source": "sqlite:data/ksipms_dev.db.alarms"
+  }
+}

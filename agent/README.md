@@ -1,188 +1,136 @@
-# Agent-of-Agent 元智能体框架
+# Agent-of-Agent 元智能体平台
 
-> 自动生成、调试和优化 LangGraph 子智能体的元智能体系统
+> **核心流程**：你写一份 Markdown 任务规范 → Claude 生成 system prompt 与代码 →
+> Qwen3-VL-4B-Instruct-FP8 跑测试 → 通过则注册到 FastAPI → 真实 SQL 业务库可用。
 
-## 快速开始
-
-### 1. 激活环境
+## 关键启动命令
 
 ```bash
+# 1. 设置 IMDS 代理凭证
+export ANTHROPIC_AUTH_TOKEN=sk-de843a0c85b1ffadaf05f935734544fa26b0aab8c6cdbcb979676d14bd07d9ee
+export ANTHROPIC_BASE_URL=https://imds.ai/
+export ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# 2. 激活 conda 环境
 conda activate agent
 cd /mnt/data3/clip/LangGraph/agent/agent
+
+# 3. 准备数据底座（首次必跑）
+python data/seed.py
+
+# 4. CLI 跑流水线（生成新 Agent）
+bash autoctl.sh start templates/AGENT_SPEC_EXAMPLE.md
+bash autoctl.sh status <job_id>
+bash autoctl.sh logs   <job_id>
+bash autoctl.sh list
+
+# 5. 发布到 FastAPI
+python publish.py <job_id>
+
+# 6. 启动 Web 控制台（可选，更易用）
+bash web/start_web.sh        # http://0.0.0.0:7860
 ```
 
-### 2. 运行示例
-
-```bash
-python run_meta_agent.py
-```
-
-## 功能特性
-
-- ✅ **自动生成 System Prompt**：根据任务描述和工具定义自动生成
-- ✅ **代码自动生成**：基于模板生成可运行的 LangGraph Agent
-- ✅ **自动化测试**：执行测试用例，评估性能指标
-- ✅ **反馈优化循环**：分析失败原因，自动优化 Prompt
-- ✅ **版本管理**：保存最佳代码、Prompt 和评估指标
-
-## 项目结构
+## 文件地图
 
 ```
 agent/agent/
-├── README.md                        # 本文档
-├── feasibility_analysis.md          # 可行性分析与架构设计
-├── run_meta_agent.py                # 主运行脚本
+├── RULES.md                  ★ 通用契约（接口/工具调用/审计/版本）
+├── autoctl.sh                ★ 后台守护进程（start/status/logs/list/stop）
+├── run_meta_agent.py         ★ 流水线主脚本
+├── publish.py                ★ 发布到 FastAPI
+├── registry.py               注册表读写
+│
+├── templates/
+│   ├── AGENT_SPEC_TEMPLATE.md ★ 任务规范模板（必读）
+│   └── AGENT_SPEC_EXAMPLE.md  告警查询填好示例
+│
+├── data/
+│   ├── CHECKLIST.md           ★ 数据库准备清单
+│   ├── schema.sql             SQLite DDL
+│   ├── schema_mysql.sql       MySQL 8.0 DDL（平台对接）
+│   ├── seed.py                生成模拟数据
+│   └── README.md
+│
 ├── meta_agent/
-│   ├── __init__.py
-│   ├── prompt_generator.py          # 元提示词生成器
-│   ├── code_generator.py            # 代码生成器
-│   ├── executor.py                  # 执行器
-│   ├── evaluator.py                 # 评估器
-│   └── feedback_analyzer.py         # 反馈分析器
+│   ├── llm_client.py          Anthropic SDK 封装（IMDS 代理 + 预算）
+│   ├── prompt_generator.py    走 Claude 生成/优化 prompt
+│   ├── code_generator.py      模板填充：注入 prompt + 真 SQLite 工具
+│   ├── tool_impl.py           query_alarms / query_video / query_person 真实现
+│   ├── executor.py            子进程隔离 + plan-based 判定（不再用 stdout）
+│   ├── evaluator.py           三维加权：tool_accuracy + execution + case_pass
+│   ├── feedback_analyzer.py   失败原因 → Claude 反馈摘要
+│   └── spec_parser.py         markdown spec → task dict
+│
+├── web/
+│   ├── app.py                 ★ Gradio 4 Tab 控制台
+│   ├── job_manager.py         任务状态（独立 SQLite）
+│   ├── start_web.sh
+│   └── README.md
+│
+├── registry/
+│   └── agent_registry.json    ★ 已发布 Agent 单一事实源
+│
 ├── artifacts/
-│   ├── generated_agents/            # 生成的子 Agent 代码
-│   ├── best_prompts/                # 最佳 Prompt 归档
-│   └── test_results/                # 测试结果
-└── tests/
-    └── fixtures/                    # 测试用例
-
+│   ├── <job_id>/              每次跑流水线的产出
+│   │   ├── spec.md
+│   │   ├── system_prompt.txt
+│   │   ├── agent_code.py      ★ 生成的可运行 Agent
+│   │   ├── metrics.json
+│   │   ├── test_report.json
+│   │   ├── claude_log.jsonl   每次 Claude 调用的 token 累计
+│   │   └── REGISTER.json
+│   └── published/<name>_v<ver>.py  发布后的归档
+│
+└── logs/jobs/<job_id>/run.log autoctl 启动产生的进程日志
 ```
 
-## 使用示例
-
-### 定义任务
-
-```python
-task = {
-    "name": "alarm_query_agent",
-    "description": "查询安全生产平台的告警记录",
-    "tools": [
-        {
-            "name": "query_alarms",
-            "description": "查询告警记录",
-            "parameters": {
-                "date": "日期 YYYY-MM-DD",
-                "alarm_type": "告警类型：smoking/no_helmet/phone/no_mask"
-            }
-        }
-    ],
-    "test_cases": [
-        {
-            "input": "今天发生了哪几种告警？",
-            "expected_tool": "query_alarms"
-        }
-    ]
-}
-```
-
-### 运行元智能体
-
-```python
-from run_meta_agent import run_meta_agent
-
-result = run_meta_agent(
-    task=task,
-    max_iterations=5,      # 最大迭代次数
-    target_score=0.8,      # 目标得分
-    save_artifacts=True    # 保存产物
-)
-
-print(f"成功: {result['success']}")
-print(f"得分: {result['score']:.1%}")
-print(f"迭代次数: {result['iterations']}")
-```
-
-### 查看生成的 Agent
-
-```bash
-# 生成的代码
-cat artifacts/generated_agents/alarm_query_agent.py
-
-# 最佳 Prompt
-cat artifacts/best_prompts/alarm_query_agent_prompt.txt
-
-# 评估指标
-cat artifacts/test_results/alarm_query_agent_metrics.json
-```
-
-## 评估指标
-
-| 指标 | 说明 | 权重 |
-|---|---|---|
-| **tool_accuracy** | 工具调用准确率（调用了正确的工具） | 60% |
-| **execution_success** | 执行成功率（未抛出异常） | 40% |
-| **overall_score** | 综合得分 | - |
-
-**目标**：overall_score ≥ 0.8
-
-## 工作流程
+## 数据流
 
 ```
-1. Prompt 生成
-   ↓
-2. 代码生成（基于模板）
-   ↓
-3. 执行测试用例
-   ↓
-4. 评估性能指标
-   ↓
-5. 分析失败原因
-   ↓
-6. 优化 Prompt
-   ↓
-7. 重复 2-6（直到达标或超过最大迭代次数）
+spec.md  →  spec_parser  →  task dict
+            │
+            ▼
+        PromptGenerator (Claude)  ───►  system_prompt.txt
+            │
+            ▼
+        CodeGenerator (模板)      ───►  agent_code.py
+            │                            │
+            │                            ▼ 真连
+            │                         SQLite (data/ksipms_dev.db)
+            ▼
+        Executor (子进程)
+        - 调 agent.run(test_case.input)
+        - Qwen3-VL-4B (port 8004) 决策
+        - Plan + tool_results 落盘
+            │
+            ▼
+        Evaluator → metrics.json
+            │
+            ├─ pass → REGISTER.json（passed_acceptance=true）→ publish 到 /agents/<name>/chat
+            └─ fail → FeedbackAnalyzer (Claude) → PromptGenerator.optimize → 下一轮
 ```
 
-## 下一步开发
+## RULES.md 关键约束（节选）
 
-### 阶段 2：自动迭代优化（当前 MVP 已实现基础版）
-- [ ] 更智能的 Prompt 优化策略
-- [ ] 支持多种失败模式识别
-- [ ] 历史最佳 Prompt 复用
+- 每个 Agent 必须暴露 `def run(user_message: str, **ctx) -> dict`，返回固定结构
+- `plan` 中工具名必须在 spec 白名单里，否则视为幻觉
+- 每次工具调用必须写 `audit_log`（best-effort）
+- Token 预算 `INPUT=50000 / OUTPUT=20000`，超额抛 BudgetExceeded
+- 不允许在 stdout 里 print 关键决策——评估器只看 plan 字典
 
-### 阶段 3：工具封装与 MCP/Skill 集成
-- [ ] 真实 MCP 工具调用（替换 mock）
-- [ ] 工具注册表
-- [ ] 封装为 Claude Code Skill
+## 已知限制（下一阶段）
 
-### 阶段 4：多 Agent 协同
-- [ ] Agent 注册表与版本管理
-- [ ] 复杂任务自动拆解为多 Agent 协同
-- [ ] 知识库集成（向量数据库存储成功案例）
+- 知识库 / RAG 未启用（spec §6 是占位）
+- 真实 MCP 工具协议未接（仍用 SQLite 模拟）
+- Multi-Agent 协同未实现（agent_registry 已留位）
+- 公司平台 SSO/RBAC 未实现
 
-## 对比：ConvNeXt-V2 自训练
+## 文档索引
 
-| 维度 | ConvNeXt-V2 自训练 | Agent-of-Agent |
-|---|---|---|
-| 基础设施 | PyTorch 训练脚本 | LangGraph + FastAPI |
-| 优化目标 | 数值超参 | 文本 Prompt + 工具配置 |
-| 评估指标 | Rank-1, mAP | 工具准确率 + 执行成功率 |
-| 反馈延迟 | 长（数小时） | 短（数分钟） |
-| 实现机制 | ✅ 已验证 | ✅ MVP 已实现 |
-
-## 常见问题
-
-### Q: 为什么工具调用是 mock 的？
-A: MVP 阶段先验证核心流程。阶段 3 会接入真实 MCP 工具。
-
-### Q: 如何添加新工具？
-A: 在任务定义的 `tools` 列表中添加工具描述即可。
-
-### Q: 如何提高生成质量？
-A: 提供更详细的工具描述、增加测试用例覆盖、提高 target_score。
-
-## 参考资料
-
-- 可行性分析：`feasibility_analysis.md`
-- ConvNeXt-V2 自训练：`/mnt/data3/clip/work-clothes/ConvNeXt-V2-wc/`
-- LangGraph 官方文档：https://docs.langchain.com/langgraph
-
-## 许可
-
-MIT License
-
----
-
-**创建时间**：2026-06-02  
-**作者**：Claude Opus 4.6 + 算法工程师  
-**状态**：✅ MVP 已完成，可运行
+- `feasibility_analysis.md` — 早期可行性分析（参考）
+- `SUMMARY.md` — MVP 阶段总结（参考）
+- `RULES.md` — **当前生效的强制规则**
+- `data/CHECKLIST.md` — 数据库准备清单
+- `templates/AGENT_SPEC_TEMPLATE.md` — 任务描述模板
+- `web/README.md` — Web 控制台用法

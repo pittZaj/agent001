@@ -1,0 +1,19 @@
+{
+  "job_id": "smoke_dry",
+  "agent_name": "alarm_query_agent",
+  "version": "0.1.0",
+  "score": 1.0,
+  "metrics": {
+    "tool_accuracy": 1.0,
+    "execution_success": 1.0,
+    "overall_score": 1.0,
+    "case_pass_rate": 0.333
+  },
+  "iteration": 1,
+  "produced_at": "2026-06-03T01:28:33.817387+00:00",
+  "spec_path": "/mnt/data3/clip/LangGraph/agent/agent/templates/AGENT_SPEC_EXAMPLE.md",
+  "code_path": "/mnt/data3/clip/LangGraph/agent/agent/artifacts/smoke_dry/agent_code.py",
+  "data_source": "sqlite:data/ksipms_dev.db.alarms",
+  "claude_usage": null,
+  "passed_acceptance": true
+}

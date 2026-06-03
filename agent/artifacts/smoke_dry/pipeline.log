@@ -1,0 +1,11 @@
+[2026-06-03T09:28:18] job_id=smoke_dry
+[2026-06-03T09:28:18] spec=/mnt/data3/clip/LangGraph/agent/agent/templates/AGENT_SPEC_EXAMPLE.md
+[2026-06-03T09:28:18] agent_name=alarm_query_agent v0.1.0
+[2026-06-03T09:28:18] tools=['query_alarms']
+[2026-06-03T09:28:18] test_cases=3
+[2026-06-03T09:28:18] target_score=0.7 max_iterations=1
+[2026-06-03T09:28:18] --- iter 1 ---
+[2026-06-03T09:28:33] metrics={'tool_accuracy': 1.0, 'execution_success': 1.0, 'overall_score': 1.0, 'case_pass_rate': 0.333}
+[2026-06-03T09:28:33] pass_rate=1/3
+[2026-06-03T09:28:33] 达标 (overall=1.0 >= 0.7)
+[2026-06-03T09:28:33] DONE -> /mnt/data3/clip/LangGraph/agent/agent/artifacts/smoke_dry

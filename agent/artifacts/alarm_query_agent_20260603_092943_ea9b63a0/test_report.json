@@ -1,0 +1,106 @@
+{
+  "passed": 1,
+  "failed": 2,
+  "total": 3,
+  "success_rate": 0.3333333333333333,
+  "details": [
+    {
+      "input": "今天发生了哪些告警？",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "date": "<TODAY>"
+      },
+      "expected_output_contains": "告警",
+      "passed": true,
+      "reasons": [],
+      "agent_output_preview": "为查询「今天发生了哪些告警？」, 我执行了以下步骤：\n1. query_alarms: 共 0 条告警 []",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-03"
+          },
+          "reason": "用户询问今天发生的告警，需按日期筛选为2026-06-03的告警记录。"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-03"
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "input": "查询昨天的抽烟告警",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "alarm_type": "smoking"
+      },
+      "expected_output_contains": "smoking",
+      "passed": false,
+      "reasons": [
+        "missing arg: alarm_type",
+        "output missing substring: 'smoking'"
+      ],
+      "agent_output_preview": "为查询「查询昨天的抽烟告警」, 我执行了以下步骤：\n1. query_alarms({'date': '2026-06-02', 'type': '抽烟告警'}) 失败: bad args for query_alarms: query_alarms() got an unexpected keyword argument 'type'",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-02",
+            "type": "抽烟告警"
+          },
+          "reason": "根据用户要求，查询昨天（2026-06-02）的抽烟告警记录。"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "date": "2026-06-02",
+            "type": "抽烟告警"
+          },
+          "error": "bad args for query_alarms: query_alarms() got an unexpected keyword argument 'type'"
+        }
+      ]
+    },
+    {
+      "input": "最近未戴安全帽的告警",
+      "expected_tool": "query_alarms",
+      "expected_args_contains": {
+        "alarm_type": "no_helmet"
+      },
+      "expected_output_contains": "helmet",
+      "passed": false,
+      "reasons": [
+        "missing arg: alarm_type",
+        "output missing substring: 'helmet'"
+      ],
+      "agent_output_preview": "为查询「最近未戴安全帽的告警」, 我执行了以下步骤：\n1. query_alarms({'type': '未戴安全帽', 'date_range': 'last_7_days'}) 失败: bad args for query_alarms: query_alarms() got an unexpected keyword argument 'type'",
+      "plan": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "type": "未戴安全帽",
+            "date_range": "last_7_days"
+          },
+          "reason": "根据用户需求，查询最近7天内未戴安全帽的告警记录，以满足对特定类型告警的筛选需求。"
+        }
+      ],
+      "tool_results_preview": [
+        {
+          "task": "query_alarms",
+          "args": {
+            "type": "未戴安全帽",
+            "date_range": "last_7_days"
+          },
+          "error": "bad args for query_alarms: query_alarms() got an unexpected keyword argument 'type'"
+        }
+      ]
+    }
+  ],
+  "error": null
+}

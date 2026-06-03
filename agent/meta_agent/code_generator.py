@@ -1,297 +1,291 @@
+"""生成 LangGraph Agent 的 Python 代码。
+
+模板部分（StateGraph + 三节点）保持稳定；`SYSTEM_PROMPT` 注入由 Claude 生成的内容。
+工具调用 **不再 mock**：直接 import meta_agent.tool_impl.call_tool 真连 SQLite。
+
+输出契约严格符合 RULES §1：
+    {"response": str, "plan": list, "tool_results": list, "error": str|None, "trace_id": str}
 """
-代码生成器
+from __future__ import annotations
 
-基于 system prompt 和工具定义，生成可执行的 LangGraph Agent 代码
-"""
-from typing import Dict, List, Any
+import json
+from datetime import datetime, timezone
+from typing import Any
 
 
-class CodeGenerator:
-    """LangGraph Agent 代码生成器"""
+CODE_TEMPLATE = '''"""自动生成的 LangGraph Agent: {agent_name}
 
-    def __init__(self):
-        pass
-
-    def generate(self, prompt: str, tools: List[Any], agent_name: str = "generated_agent") -> str:
-        """生成 LangGraph Agent 代码
-
-        Args:
-            prompt: System prompt
-            tools: 工具列表
-            agent_name: Agent 名称
-
-        Returns:
-            生成的 Python 代码
-        """
-        # 提取工具名称
-        tool_names = self._extract_tool_names(tools)
-
-        # 生成代码
-        code = f'''"""
-自动生成的 LangGraph Agent: {agent_name}
+由 meta_agent.code_generator 在 {generated_at} 生成。
+不要手改本文件——下一次生成会覆盖。
 """
 import json
-from typing import TypedDict, List, Dict, Any
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
+import os
+import re
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, TypedDict
+
+# 让生成的 agent 能 import meta_agent.tool_impl（项目根在生成时硬编码，运行时可被 AOA_PROJECT_ROOT 覆盖）
+_PROJECT_ROOT = Path(os.environ.get("AOA_PROJECT_ROOT", "{project_root}"))
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from meta_agent.tool_impl import call_tool  # type: ignore  # noqa: E402
+
+try:
+    from langchain_openai import ChatOpenAI
+    from langgraph.graph import StateGraph, END
+except ImportError as e:  # 兜底：测试时如果没装也要能 import 本文件
+    ChatOpenAI = None  # type: ignore
+    StateGraph = None  # type: ignore
+    END = None  # type: ignore
 
 
-# ==================== 状态定义 ====================
+# -------------------- 状态 --------------------
 class AgentState(TypedDict):
-    """Agent 状态"""
     user_message: str
     plan: List[Dict[str, Any]]
     current_task_idx: int
     tool_results: List[Dict[str, Any]]
     final_response: str
-    error: str | None
+    error: str
+    trace_id: str
 
 
-# ==================== System Prompt ====================
-SYSTEM_PROMPT = """
-{prompt}
-"""
+# -------------------- System Prompt（Claude 生成）--------------------
+SYSTEM_PROMPT = {system_prompt_literal}
 
 
-# ==================== 工具模拟（MVP 版本）====================
-def mock_tool_call(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """模拟工具调用（MVP 阶段）
-
-    Args:
-        tool_name: 工具名称
-        args: 工具参数
-
-    Returns:
-        模拟的工具返回结果
-    """
-    # MVP: 返回模拟数据
-    if tool_name == "query_alarms":
-        return {{
-            "total": 8,
-            "alarms": [
-                {{"type": "no_helmet", "count": 5, "camera": "A01"}},
-                {{"type": "smoking", "count": 2, "camera": "B03"}},
-                {{"type": "phone", "count": 1, "camera": "A02"}}
-            ]
-        }}
-    elif tool_name == "query_video":
-        return {{
-            "video_url": "http://example.com/video/123.mp4",
-            "duration": 120
-        }}
-    elif tool_name == "query_person":
-        return {{
-            "person_id": "P001",
-            "name": "张三",
-            "department": "施工部"
-        }}
-    else:
-        return {{"error": f"未知工具: {{tool_name}}"}}
+# -------------------- LLM 配置（执行 Agent 的小模型）--------------------
+LLM_BASE_URL = os.environ.get("AGENT_LLM_BASE_URL", "{llm_base_url}")
+LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "{llm_model}")
+LLM_API_KEY = os.environ.get("AGENT_LLM_API_KEY", "EMPTY")
+DATA_SOURCE = "{data_source}"
+AGENT_NAME = "{agent_name}"
+ALLOWED_TOOLS = {allowed_tools_literal}
 
 
-# ==================== 图节点 ====================
-def planner(state: AgentState) -> AgentState:
-    """规划节点：解析用户意图，生成执行计划"""
-    llm = ChatOpenAI(
-        base_url="http://127.0.0.1:8004/v1",
-        api_key="EMPTY",
-        model="Qwen3-VL-4B-Instruct-FP8",
-        temperature=0.2
-    )
+def _today_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    user_message = state["user_message"]
 
-    # 调用 LLM 生成计划
-    messages = [
-        {{"role": "system", "content": SYSTEM_PROMPT}},
-        {{"role": "user", "content": user_message}}
-    ]
+def _resolve_today_placeholders(args: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(args)
+    for k, v in out.items():
+        if isinstance(v, str) and v.strip().lower() in ("today", "今天", "<today>"):
+            out[k] = _today_utc()
+    return out
 
+
+def _extract_json(text: str) -> Dict[str, Any]:
+    """从 LLM 输出里抽 JSON：先去 markdown 围栏，再尝试 loads，再抓第一个 {{...}} 块。"""
+    if not text:
+        return {{}}
+    s = text.strip()
+    if "```" in s:
+        m = re.search(r"```(?:json)?\\s*(.+?)```", s, flags=re.DOTALL)
+        if m:
+            s = m.group(1).strip()
     try:
-        response = llm.invoke(messages)
-        content = response.content
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\\{{.*\\}}", s, flags=re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return {{}}
+    return {{}}
 
-        # 尝试解析 JSON
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
 
-        plan_data = json.loads(content)
-        plan = plan_data.get("plan", [])
-
-    except Exception as e:
-        # 解析失败，返回错误
-        state["error"] = f"规划失败: {{str(e)}}"
+# -------------------- 节点 --------------------
+def _planner_node(state: AgentState) -> AgentState:
+    user = state["user_message"]
+    if user.strip() == "__healthcheck__":
+        state["plan"] = []
+        state["final_response"] = "ok"
+        return state
+    if ChatOpenAI is None:
+        state["error"] = "langchain_openai not installed"
         return state
 
-    state["plan"] = plan
-    state["current_task_idx"] = 0
+    today_hint = f"\\n注意：当前 UTC 日期是 {{_today_utc()}}。"
+    llm = ChatOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY,
+                     model=LLM_MODEL, temperature=0.2, max_tokens=1024)
+    try:
+        resp = llm.invoke([
+            {{"role": "system", "content": SYSTEM_PROMPT + today_hint}},
+            {{"role": "user", "content": user}},
+        ])
+        data = _extract_json(getattr(resp, "content", "") or "")
+        plan = data.get("plan", [])
+        if not isinstance(plan, list):
+            plan = []
+        # 过滤幻觉工具
+        plan = [p for p in plan if isinstance(p, dict) and p.get("task") in ALLOWED_TOOLS]
+        # 解析 today 占位
+        for p in plan:
+            p["args"] = _resolve_today_placeholders(p.get("args", {{}}) or {{}})
+        state["plan"] = plan
+        if not plan:
+            state["error"] = "planner_no_valid_plan"
+    except Exception as e:
+        state["error"] = f"planner_exception: {{type(e).__name__}}: {{e}}"
     return state
 
 
-def executor(state: AgentState) -> AgentState:
-    """执行节点：逐个执行计划中的任务"""
-    plan = state["plan"]
-    current_idx = state["current_task_idx"]
-
-    if current_idx >= len(plan):
-        # 所有任务已完成
+def _executor_node(state: AgentState) -> AgentState:
+    plan = state.get("plan", [])
+    idx = state.get("current_task_idx", 0)
+    if idx >= len(plan):
         return state
-
-    # 执行当前任务
-    task = plan[current_idx]
-    tool_name = task.get("task")
-    args = task.get("args", {{}})
-
-    # 调用工具（MVP: mock）
-    result = mock_tool_call(tool_name, args)
-
-    # 记录结果
+    step = plan[idx]
+    tool_name = step.get("task")
+    args = step.get("args", {{}}) or {{}}
+    ctx = {{"trace_id": state.get("trace_id", ""), "agent_name": AGENT_NAME}}
+    result = call_tool(tool_name, args, ctx=ctx, data_source=DATA_SOURCE)
     state["tool_results"].append({{
         "task": tool_name,
         "args": args,
-        "result": result
+        "result": result if not result.get("error") else None,
+        "error": result.get("error"),
     }})
-
-    # 更新索引
-    state["current_task_idx"] += 1
-
+    state["current_task_idx"] = idx + 1
     return state
 
 
-def should_continue(state: AgentState) -> str:
-    """判断是否继续执行"""
+def _should_continue(state: AgentState) -> str:
     if state.get("error"):
-        return "format_response"
-
-    if state["current_task_idx"] >= len(state["plan"]):
-        return "format_response"
-
+        return "format"
+    if state.get("current_task_idx", 0) >= len(state.get("plan", [])):
+        return "format"
     return "execute"
 
 
-def format_response(state: AgentState) -> AgentState:
-    """格式化最终响应"""
-    if state.get("error"):
+def _formatter_node(state: AgentState) -> AgentState:
+    if state["user_message"].strip() == "__healthcheck__":
+        state["final_response"] = "ok"
+        return state
+    if state.get("error") and not state.get("tool_results"):
         state["final_response"] = f"执行失败: {{state['error']}}"
         return state
-
-    # 汇总工具结果
-    tool_results = state["tool_results"]
-
-    # 简单格式化（MVP 版本）
-    lines = ["执行结果：", ""]
-    for i, result in enumerate(tool_results, 1):
-        lines.append(f"{{i}}. 工具: {{result['task']}}")
-        lines.append(f"   参数: {{result['args']}}")
-        lines.append(f"   结果: {{json.dumps(result['result'], ensure_ascii=False, indent=2)}}")
-        lines.append("")
-
-    state["final_response"] = "\\n".join(lines)
+    parts = [f"为查询「{{state['user_message']}}」, 我执行了以下步骤："]
+    for i, tr in enumerate(state.get("tool_results", []), 1):
+        if tr.get("error"):
+            parts.append(f"{{i}}. {{tr['task']}}({{tr['args']}}) 失败: {{tr['error']}}")
+            continue
+        res = tr.get("result") or {{}}
+        if tr["task"] == "query_alarms":
+            total = res.get("total", 0)
+            by_type = res.get("by_type", [])
+            summary = ", ".join(f"{{x['alarm_type']}}={{x['count']}}" for x in by_type[:5])
+            parts.append(f"{{i}}. query_alarms: 共 {{total}} 条告警 [{{summary}}]")
+        else:
+            parts.append(f"{{i}}. {{tr['task']}}: {{json.dumps(res, ensure_ascii=False)[:200]}}")
+    state["final_response"] = "\\n".join(parts)
     return state
 
 
-# ==================== 构建图 ====================
-def build_graph() -> StateGraph:
-    """构建 LangGraph 图"""
-    workflow = StateGraph(AgentState)
-
-    # 添加节点（避免与状态键冲突）
-    workflow.add_node("planner", planner)
-    workflow.add_node("executor", executor)
-    workflow.add_node("formatter", format_response)
-
-    # 添加边
-    workflow.set_entry_point("planner")
-    workflow.add_conditional_edges(
-        "planner",
-        lambda s: "executor" if not s.get("error") else "formatter"
-    )
-    workflow.add_conditional_edges(
-        "executor",
-        should_continue,
-        {{
-            "execute": "executor",
-            "format_response": "formatter"
-        }}
-    )
-    workflow.add_edge("formatter", END)
-
-    return workflow.compile()
+def _build_graph():
+    if StateGraph is None:
+        return None
+    g = StateGraph(AgentState)
+    g.add_node("planner", _planner_node)
+    g.add_node("executor", _executor_node)
+    g.add_node("formatter", _formatter_node)
+    g.set_entry_point("planner")
+    g.add_conditional_edges("planner", lambda s: "executor" if not s.get("error") and s.get("plan") else "formatter",
+                            {{"executor": "executor", "formatter": "formatter"}})
+    g.add_conditional_edges("executor", _should_continue,
+                            {{"execute": "executor", "format": "formatter"}})
+    g.add_edge("formatter", END)
+    return g.compile()
 
 
-# ==================== 运行接口 ====================
-def run(user_message: str) -> Dict[str, Any]:
-    """运行 Agent
+_GRAPH = None
 
-    Args:
-        user_message: 用户输入
 
-    Returns:
-        执行结果
-    """
-    graph = build_graph()
-
-    initial_state = {{
+def run(user_message: str, **ctx) -> Dict[str, Any]:
+    """RULES §1 契约入口。"""
+    global _GRAPH
+    trace_id = ctx.get("trace_id") or str(uuid.uuid4())
+    if user_message.strip() == "__healthcheck__":
+        return {{"response": "ok", "plan": [], "tool_results": [], "error": None, "trace_id": trace_id}}
+    if _GRAPH is None:
+        _GRAPH = _build_graph()
+    if _GRAPH is None:
+        return {{"response": "graph not available", "plan": [], "tool_results": [],
+                 "error": "langgraph not installed", "trace_id": trace_id}}
+    init: AgentState = {{
         "user_message": user_message,
         "plan": [],
         "current_task_idx": 0,
         "tool_results": [],
         "final_response": "",
-        "error": None
+        "error": "",
+        "trace_id": trace_id,
     }}
-
-    final_state = graph.invoke(initial_state)
-
+    final = _GRAPH.invoke(init)
     return {{
-        "response": final_state.get("final_response", ""),
-        "plan": final_state.get("plan", []),
-        "tool_results": final_state.get("tool_results", []),
-        "error": final_state.get("error")
+        "response": final.get("final_response", ""),
+        "plan": final.get("plan", []),
+        "tool_results": final.get("tool_results", []),
+        "error": final.get("error") or None,
+        "trace_id": trace_id,
     }}
 
 
 if __name__ == "__main__":
-    # 测试
-    result = run("今天发生了哪几种告警？")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    msg = sys.argv[1] if len(sys.argv) > 1 else "今天的告警"
+    out = run(msg)
+    print(json.dumps(out, ensure_ascii=False, indent=2))
 '''
 
-        return code
 
-    def _extract_tool_names(self, tools: List[Any]) -> List[str]:
-        """提取工具名称列表
+class CodeGenerator:
+    """LangGraph Agent 代码生成器（模板填充式）。"""
 
-        Args:
-            tools: 工具定义列表
+    def __init__(self,
+                 llm_base_url: str = "http://127.0.0.1:8004/v1",
+                 llm_model: str = "Qwen3-VL-4B-Instruct-FP8"):
+        self.llm_base_url = llm_base_url
+        self.llm_model = llm_model
 
-        Returns:
-            工具名称列表
-        """
-        names = []
-        for tool in tools:
-            if isinstance(tool, str):
-                names.append(tool)
-            elif isinstance(tool, dict):
-                names.append(tool.get("name", "unknown"))
-        return names
+    def generate(self, system_prompt: str, tools: list[dict[str, Any]],
+                 agent_name: str = "generated_agent",
+                 data_source: str = "sqlite:data/ksipms_dev.db",
+                 project_root: str = "") -> str:
+        allowed = [t.get("name") for t in tools if t.get("name")]
+        from pathlib import Path as _P
+        if not project_root:
+            project_root = str(_P(__file__).resolve().parents[1])
+        return CODE_TEMPLATE.format(
+            agent_name=agent_name,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            system_prompt_literal=_py_str_literal(system_prompt),
+            llm_base_url=self.llm_base_url,
+            llm_model=self.llm_model,
+            data_source=data_source,
+            allowed_tools_literal=repr(set(allowed)),
+            project_root=project_root,
+        )
+
+
+def _py_str_literal(s: str) -> str:
+    """把任意字符串安全地嵌入 Python 三引号字符串。"""
+    safe = s.replace("\\", "\\\\").replace('"""', '"\\"\\""')
+    return '"""\n' + safe + '\n"""'
 
 
 if __name__ == "__main__":
-    # 测试代码生成
-    generator = CodeGenerator()
-
-    prompt = """你是一个告警查询智能体。
-用户可以询问今天的告警记录，你需要调用 query_alarms 工具获取数据。"""
-
-    tools = [
-        {
-            "name": "query_alarms",
-            "description": "查询告警记录",
-            "parameters": {
-                "date": "日期 YYYY-MM-DD"
-            }
-        }
-    ]
-
-    code = generator.generate(prompt, tools, "alarm_query_agent")
-    print(code)
+    g = CodeGenerator()
+    code = g.generate(
+        system_prompt="你是 alarm_query_agent。\n规则：必须输出 plan JSON。",
+        tools=[{"name": "query_alarms", "description": "x", "parameters": {"date": "YYYY-MM-DD"}}],
+        agent_name="alarm_query_agent",
+    )
+    print(code[:1500])
