@@ -93,7 +93,13 @@ async def startup_event():
     logger.info("🚀 KSAgent 启动中...")
     logger.info(f"   LLM 后端: {CONFIG['llm']['base_url']}")
     logger.info(f"   模型名称: {CONFIG['llm']['model']}")
+    logger.info(f"   MCP 启用: {CONFIG['mcp']['enabled']}")
     logger.info("=" * 60)
+
+    # 初始化 Skill Registry
+    from skills.init import init_skill_registry
+    await init_skill_registry()
+    logger.info("Skill Registry 已就绪")
 
     # 预热：构建图
     get_graph()

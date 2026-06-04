@@ -4,6 +4,7 @@
 - 每条消息独立调用 agent.run（agent 本身无会话状态）
 - UI 用 ChatGPT 风格只是展示，多轮上下文不会自动喂给 agent
 - agent 模块加载后用模块名缓存，避免重复 import
+- 支持动态刷新已注册 agent 列表和重新加载 agent 模块
 """
 from __future__ import annotations
 
@@ -25,10 +26,12 @@ _RUN_CACHE: dict[str, Any] = {}
 
 
 def published_agent_names() -> list[str]:
+    """获取当前所有已发布的 agent 名称列表"""
     return list(list_agents().keys())
 
 
 def _get_run(name: str):
+    """获取 agent 的 run 函数（带缓存）"""
     if name in _RUN_CACHE:
         return _RUN_CACHE[name]
     run_fn = load_agent_run(name)
@@ -99,9 +102,29 @@ def format_debug_panel(out: dict[str, Any]) -> str:
 
 
 def reload_agent(name: str) -> str:
+    """重新加载指定 agent 的模块（清除缓存后重新导入）
+
+    使用场景：
+    - 发布了新版本的同名 agent
+    - 手动修改了 published 目录下的 agent 代码
+    - 需要确保加载最新版本
+
+    Returns:
+        str: 操作结果信息
+    """
+    if not name:
+        return "❌ 请选择一个 Agent"
+
+    # 清除缓存
     _RUN_CACHE.pop(name, None)
+
+    # 尝试重新加载
     try:
-        _get_run(name)
-        return f"✅ 重新加载 {name}"
-    except Exception:
-        return f"❌ 加载失败:\n{traceback.format_exc()}"
+        run_fn = _get_run(name)
+        return f"✅ 已重新加载 `{name}` (缓存已清除，模块已重新导入)"
+    except KeyError:
+        return f"❌ Agent `{name}` 不存在于注册表中"
+    except FileNotFoundError as e:
+        return f"❌ Agent `{name}` 的代码文件不存在: {e}"
+    except Exception as e:
+        return f"❌ 加载失败: {type(e).__name__}: {e}\n\n{traceback.format_exc()}"

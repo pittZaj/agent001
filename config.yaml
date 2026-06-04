@@ -2,8 +2,8 @@
 
 # LLM 配置（Qwen3-VL-4B vLLM 服务）
 llm:
-  base_url: "http://127.0.0.1:8002/v1"
-  model: "Qwen3-VL-4B-Instruct"
+  base_url: "http://127.0.0.1:8004/v1"
+  model: "Qwen3-VL-4B-Instruct-FP8"
   api_key: "EMPTY"
   temperature: 0.2
   max_tokens: 2048
@@ -11,7 +11,7 @@ llm:
 
 # MCP 配置（ksipms 平台业务接口）
 mcp:
-  enabled: false  # 阶段 1 先 mock，阶段 2 再对接真实端点
+  enabled: true  # 阶段 2：启用 MCP
   endpoint: "http://ksipms.internal:9000/mcp"
   timeout: 30
   tools:

@@ -1,0 +1,56 @@
+Exception in thread Thread-3 (_do_normal_analytics_request):
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 101, in handle_request
+    raise exc
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 78, in handle_request
+    stream = self._connect(request)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 156, in _connect
+    stream = stream.start_tls(**kwargs)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_backends/sync.py", line 154, in start_tls
+    with map_exceptions(exc_map):
+  File "/root/anaconda3/envs/agent/lib/python3.10/contextlib.py", line 153, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectTimeout: _ssl.c:1000: The handshake operation timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/agent/lib/python3.10/threading.py", line 1016, in _bootstrap_inner
+    self.run()
+  File "/root/anaconda3/envs/agent/lib/python3.10/threading.py", line 953, in run
+    self._target(*self._args, **self._kwargs)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/analytics.py", line 70, in _do_normal_analytics_request
+    data["ip_address"] = get_local_ip_address()
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/analytics.py", line 131, in get_local_ip_address
+    ip_address = httpx.get(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_api.py", line 195, in get
+    return request(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_api.py", line 109, in request
+    return client.request(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/root/anaconda3/envs/agent/lib/python3.10/contextlib.py", line 153, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectTimeout: _ssl.c:1000: The handshake operation timed out

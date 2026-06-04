@@ -1,0 +1,86 @@
+# KSIPMS MCP Server 配置
+ksipms_server:
+  db_path: "agent/data/ksipms_dev.db"
+  read_only: true
+
+  # 白名单模式：仅暴露这些表
+  allowed_tables:
+    - alarms
+    - persons
+    - video_clips
+    - audit_log
+
+  # 字段白名单（隐私保护）
+  table_fields:
+    alarms:
+      - alarm_uuid
+      - alarm_type
+      - camera_id
+      - area_id
+      - severity
+      - status
+      - ts_event
+      - alarm_desc
+      - model_conf
+      # 不暴露: person_id（关联查询时通过 query_person）
+
+    persons:
+      - person_id
+      - name
+      - department
+      - role
+      # 不暴露: id_card, phone（隐私）
+
+    video_clips:
+      - clip_id
+      - alarm_id
+      - camera_id
+      - ts_start
+      - ts_end
+      - file_path
+
+  # 工具定义
+  tools:
+    query_alarms:
+      description: "查询告警记录，支持按日期、类型、摄像头筛选"
+      parameters:
+        type: object
+        properties:
+          date:
+            type: string
+            description: "日期 YYYY-MM-DD（UTC），留空则查最近7天"
+          alarm_type:
+            type: string
+            description: "告警类型（可选）：smoking/no_helmet/phone_use/no_mask"
+          camera_id:
+            type: string
+            description: "摄像机ID（可选）"
+      max_results: 20
+
+    query_person:
+      description: "查询人员信息及最近告警统计"
+      parameters:
+        type: object
+        properties:
+          person_id:
+            type: string
+            description: "人员ID"
+        required:
+          - person_id
+
+    query_video:
+      description: "查询录像片段"
+      parameters:
+        type: object
+        properties:
+          camera_id:
+            type: string
+            description: "摄像机ID"
+          start_time:
+            description: "开始时间（epoch秒 或 ISO格式）"
+          end_time:
+            description: "结束时间（epoch秒 或 ISO格式）"
+        required:
+          - camera_id
+          - start_time
+          - end_time

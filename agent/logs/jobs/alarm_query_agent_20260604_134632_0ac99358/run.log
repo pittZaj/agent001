@@ -1,0 +1,25 @@
+[2026-06-04T13:46:37] job_id=alarm_query_agent_20260604_134632_0ac99358
+[2026-06-04T13:46:37] spec=/mnt/data3/clip/LangGraph/agent/agent/templates/AGENT_SPEC_EXAMPLE.md
+[2026-06-04T13:46:37] agent_name=alarm_query_agent v0.1.0
+[2026-06-04T13:46:37] tools=['query_alarms']
+[2026-06-04T13:46:37] test_cases=3
+[2026-06-04T13:46:37] claude model=claude-sonnet-4-6 budget=[in:50000,out:20000]
+[2026-06-04T13:46:37] target_score=0.7 max_iterations=1
+Traceback (most recent call last):
+  File "/mnt/data3/clip/LangGraph/agent/agent/run_meta_agent.py", line 196, in main
+    register = run_pipeline(args.spec, dry_run=args.dry_run,
+  File "/mnt/data3/clip/LangGraph/agent/agent/run_meta_agent.py", line 95, in run_pipeline
+    prompt = prompt_gen.generate(task)
+  File "/mnt/data3/clip/LangGraph/agent/agent/meta_agent/prompt_generator.py", line 53, in generate
+    return self.client.call(
+  File "/mnt/data3/clip/LangGraph/agent/agent/meta_agent/llm_client.py", line 74, in call
+    msg = self._client.messages.create(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/anthropic/_utils/_utils.py", line 294, in wrapper
+    return func(*args, **kwargs)
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/anthropic/resources/messages/messages.py", line 1006, in create
+    return self._post(
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/anthropic/_base_client.py", line 1374, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/anthropic/_base_client.py", line 1147, in request
+    raise self._make_status_error_from_response(err.response) from None
+anthropic.RateLimitError: Error code: 429 - {'code': 'USAGE_LIMIT_EXCEEDED', 'message': 'error: code=429 reason="WEEKLY_LIMIT_EXCEEDED" message="weekly usage limit exceeded" metadata=map[]'}
