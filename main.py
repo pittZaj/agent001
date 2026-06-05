@@ -33,10 +33,39 @@ from graph import get_graph
 from utils.vlm import get_vlm_client
 
 
+# ===================== 启动事件（lifespan，兼容新版 starlette）=====================
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("=" * 60)
+    logger.info("🚀 KSAgent 启动中...")
+    logger.info(f"   LLM 后端: {CONFIG['llm']['base_url']}")
+    logger.info(f"   模型名称: {CONFIG['llm']['model']}")
+    logger.info(f"   MCP 启用: {CONFIG['mcp']['enabled']}")
+    logger.info("=" * 60)
+
+    # 初始化 Skill Registry
+    from skills.init import init_skill_registry
+    await init_skill_registry()
+    logger.info("Skill Registry 已就绪")
+
+    # 预热：构建图
+    get_graph()
+    logger.info("LangGraph 图已就绪")
+
+    # 挂载所有已发布的 Agent-of-Agent 产出
+    _mount_generated_agents(app)
+
+    yield  # 应用运行期
+
+
 app = FastAPI(
     title="KSAgent",
     description="安全生产场景 AI 智能体 - 基于 LangGraph + Qwen3-VL",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -86,27 +115,7 @@ def _mount_generated_agents(app: FastAPI) -> None:
         logger.info(f"挂载已发布 Agent: {name} -> {route}")
 
 
-# ===================== 启动事件 =====================
-@app.on_event("startup")
-async def startup_event():
-    logger.info("=" * 60)
-    logger.info("🚀 KSAgent 启动中...")
-    logger.info(f"   LLM 后端: {CONFIG['llm']['base_url']}")
-    logger.info(f"   模型名称: {CONFIG['llm']['model']}")
-    logger.info(f"   MCP 启用: {CONFIG['mcp']['enabled']}")
-    logger.info("=" * 60)
-
-    # 初始化 Skill Registry
-    from skills.init import init_skill_registry
-    await init_skill_registry()
-    logger.info("Skill Registry 已就绪")
-
-    # 预热：构建图
-    get_graph()
-    logger.info("LangGraph 图已就绪")
-
-    # 挂载所有已发布的 Agent-of-Agent 产出
-    _mount_generated_agents(app)
+# ===================== 启动事件（lifespan 已在文件顶部定义并注入 FastAPI）=====================
 
 
 # ===================== API 端点 =====================

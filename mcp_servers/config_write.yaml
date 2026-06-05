@@ -1,0 +1,48 @@
+# KSIPMS 只写 MCP Server 配置（受控写操作）
+ksipms_write_server:
+  db_path: "agent/data/ksipms_dev.db"
+  read_only: false  # 允许写
+
+  # 只允许 UPDATE 操作
+  allowed_operations:
+    - UPDATE
+
+  # 只允许操作 alarms 表
+  allowed_tables:
+    - alarms
+
+  # 只允许更新这些字段
+  allowed_fields:
+    alarms:
+      - status
+      - processed_note
+      - processed_at
+      - processed_by
+
+  # status 只允许设为这些值（防止误操作）
+  allowed_status_values:
+    - closed
+    - false_alarm
+
+  # 强制审计
+  audit_required: true
+
+  # 工具定义
+  tools:
+    update_alarm_status:
+      description: "更新告警处理状态（仅限 closed/false_alarm），用于大模型复判后回写结论"
+      parameters:
+        type: object
+        properties:
+          alarm_uuid:
+            type: string
+            description: "告警UUID"
+          status:
+            type: string
+            description: "处理状态：closed(确认并关闭) 或 false_alarm(误报)"
+          note:
+            type: string
+            description: "处理备注（如复判理由）"
+        required:
+          - alarm_uuid
+          - status

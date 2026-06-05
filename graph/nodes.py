@@ -1,6 +1,7 @@
 from typing import Dict, Any
 import asyncio
 import json
+import re
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from loguru import logger
@@ -50,13 +51,16 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 请按以下 JSON 格式返回任务列表：
 [
   {{"task": "query_alarms", "args": {{"date": "2026-06-01"}}}},
-  {{"task": "format_response", "args": {{"template": "今天共发生 {{count}} 类告警"}}}}
+  {{"task": "format_response", "args": {{"template": "今天共发生 {{{{count}}}} 类告警"}}}}
 ]
 
 注意：
 1. 只能使用上述列出的工具，不要编造不存在的工具
 2. 参数必须符合工具定义的 schema
 3. 如果用户请求无法用工具完成，返回：[{{"task": "direct_response", "args": {{"text": "..."}}}}]
+4. **步骤间传参**：如果后续任务需要使用前面任务的输出，使用模板语法 {{{{step_N.field_name}}}}
+   例如：步骤0返回 {{"camera_id": "CAM-005", "ts_event": 1234567890}}
+        步骤1可引用：{{"task": "query_video", "args": {{"camera_id": "{{{{step_0.camera_id}}}}"}}}}
 """
 
     messages = [
@@ -98,12 +102,37 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         }
 
 
+def _run_async(coro):
+    """在 同步/异步 两种上下文中安全运行协程。
+
+    - 无运行中事件循环（如 graph.invoke 同步调用）：用独立线程跑 asyncio.run，
+      避免 Python 3.12 下 get_event_loop 抛 RuntimeError。
+    - 有运行中循环：用 nest_asyncio 复用当前循环。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is None:
+        # 在新线程里跑一个干净的事件循环，避免污染调用方
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(lambda: asyncio.run(coro)).result()
+    else:
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(coro)
+
+
 def executor_node(state: AgentState) -> Dict[str, Any]:
     """
     执行节点：通过 Skill Registry 执行当前任务
 
-    输入：plan, current_task_idx
-    输出：tool_results, current_task_idx + 1
+    输入：plan, current_task_idx, step_outputs
+    输出：tool_results, current_task_idx + 1, step_outputs (更新)
+
+    支持步骤间传参：使用 {{step_N.field}} 语法引用前序步骤的输出
     """
     plan = state["plan"]
     idx = state["current_task_idx"]
@@ -115,6 +144,12 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     task = plan[idx]
     logger.info(f"[Executor] 执行任务 {idx + 1}/{len(plan)}: {task['task']}")
 
+    # 步骤间传参：替换参数中的模板变量
+    args = task["args"].copy() if task["args"] else {}
+    step_outputs = state.get("step_outputs", {})
+
+    args = _resolve_step_references(args, step_outputs, idx)
+
     # 通过 Skill Registry 调用
     registry = get_skill_registry()
     context = {
@@ -122,20 +157,9 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
         "trace_id": state.get("trace_id", ""),
     }
 
-    # 同步包装异步调用
+    # 同步包装异步调用（兼容 有/无 运行中事件循环 两种情况）
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果已经在异步上下文中，创建新的 task
-            import nest_asyncio
-            nest_asyncio.apply()
-            result_data = loop.run_until_complete(
-                registry.invoke(task["task"], task["args"], context)
-            )
-        else:
-            result_data = asyncio.run(
-                registry.invoke(task["task"], task["args"], context)
-            )
+        result_data = _run_async(registry.invoke(task["task"], args, context))
 
         if result_data.get("error"):
             result = {
@@ -164,11 +188,107 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     tool_results = state.get("tool_results", [])
     tool_results.append(result)
 
+    # 保存本步骤的输出，供后续步骤引用
+    if result.get("success"):
+        step_outputs[idx] = result.get("result", {})
+
     return {
         "plan": plan,
         "current_task_idx": idx + 1,
         "tool_results": tool_results,
+        "step_outputs": step_outputs,
     }
+
+
+def _resolve_step_references(args: Dict[str, Any], step_outputs: Dict[int, Any], current_idx: int) -> Dict[str, Any]:
+    """
+    递归解析参数中的步骤引用模板 {{step_N.field}}
+
+    Args:
+        args: 原始参数字典
+        step_outputs: 已执行步骤的输出 {step_idx: result}
+        current_idx: 当前步骤索引
+
+    Returns:
+        解析后的参数字典
+    """
+    resolved = {}
+
+    for key, value in args.items():
+        if isinstance(value, str):
+            # 匹配 {{step_0.camera_id}} 格式
+            matches = re.findall(r'\{\{step_(\d+)\.([^}]+)\}\}', value)
+            if matches:
+                # 纯引用快捷路径：整个值就是一个 {{step_N.field}}，保留原始类型
+                # （否则 list/dict 会被 str() 成字符串，下游工具无法使用）
+                pure_match = re.fullmatch(r'\{\{step_(\d+)\.([^}]+)\}\}', value.strip())
+                if pure_match:
+                    step_idx, field_path = int(pure_match.group(1)), pure_match.group(2)
+                    if step_idx < current_idx and step_idx in step_outputs:
+                        field_value = _get_nested_field(step_outputs[step_idx], field_path)
+                        if field_value is not None:
+                            logger.info(f"[Executor] 解析参数(保留类型): {{{{step_{step_idx}.{field_path}}}}} -> {type(field_value).__name__}")
+                            resolved[key] = field_value
+                            continue
+                    # 解析失败则原样保留
+                    resolved[key] = value
+                    continue
+
+                resolved_value = value
+                for step_idx_str, field_path in matches:
+                    step_idx = int(step_idx_str)
+
+                    if step_idx >= current_idx:
+                        logger.warning(f"[Executor] 步骤 {current_idx} 引用了未来步骤 {step_idx}，跳过")
+                        continue
+
+                    if step_idx not in step_outputs:
+                        logger.warning(f"[Executor] 步骤 {step_idx} 输出不存在，无法解析 {{{{step_{step_idx}.{field_path}}}}}")
+                        continue
+
+                    # 支持嵌套字段访问，如 step_0.data.camera_id
+                    field_value = _get_nested_field(step_outputs[step_idx], field_path)
+
+                    if field_value is not None:
+                        placeholder = f"{{{{step_{step_idx}.{field_path}}}}}"
+                        resolved_value = resolved_value.replace(placeholder, str(field_value))
+                        logger.info(f"[Executor] 解析参数: {placeholder} -> {field_value}")
+
+                resolved[key] = resolved_value
+            else:
+                resolved[key] = value
+        elif isinstance(value, dict):
+            resolved[key] = _resolve_step_references(value, step_outputs, current_idx)
+        elif isinstance(value, list):
+            resolved[key] = [
+                _resolve_step_references(item, step_outputs, current_idx) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            resolved[key] = value
+
+    return resolved
+
+
+def _get_nested_field(data: Any, field_path: str) -> Any:
+    """
+    从嵌套字典中获取字段值，支持点号分隔的路径
+
+    例如：_get_nested_field({"data": {"camera_id": "CAM-001"}}, "data.camera_id") -> "CAM-001"
+    """
+    if not isinstance(data, dict):
+        return None
+
+    parts = field_path.split(".")
+    current = data
+
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+
+    return current
 
 
 def _execute_task_mock(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,6 +328,27 @@ def _execute_task_mock(task: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def _strip_large_fields(data, _max_str=800):
+    """递归剥离工具结果里的超大字段（如 base64 图片），避免撑爆 LLM 上下文。
+
+    base64 图片等只保留占位摘要，formatter 只需知道"有一张图"即可。
+    """
+    BIG_KEYS = {"image_base64", "image", "snapshot_base64", "thumbnail"}
+    if isinstance(data, dict):
+        out = {}
+        for k, v in data.items():
+            if k in BIG_KEYS and isinstance(v, str):
+                out[k] = f"<已生成图片, {len(v)} 字节, 省略内容>"
+            elif isinstance(v, str) and len(v) > _max_str:
+                out[k] = v[:_max_str] + f"...<截断, 共{len(v)}字符>"
+            else:
+                out[k] = _strip_large_fields(v, _max_str)
+        return out
+    if isinstance(data, list):
+        return [_strip_large_fields(x, _max_str) for x in data]
+    return data
+
+
 def formatter_node(state: AgentState) -> Dict[str, Any]:
     """
     格式化节点：汇总工具结果，生成最终响应
@@ -233,7 +374,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     for r in tool_results:
         if r.get("success"):
             tool_name = r["tool"]
-            result_data = r.get("result", {})
+            result_data = _strip_large_fields(r.get("result", {}))
             summary_parts.append(f"[工具 {tool_name} 返回]\n{json.dumps(result_data, ensure_ascii=False, indent=2)}")
         else:
             summary_parts.append(f"[工具 {r['tool']} 执行失败: {r.get('error', '未知错误')}]")

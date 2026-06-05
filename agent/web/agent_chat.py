@@ -24,14 +24,55 @@ from registry import list_agents, load_agent_run  # noqa: E402
 
 _RUN_CACHE: dict[str, Any] = {}
 
+# 主智能体：增强后的 Plan-Execute 主图（支持复判/统计/可视化/回溯/回写）
+# 用户在 Tab6 默认只需选它，背后走升级后的主图。
+MAIN_AGENT_NAME = "主智能体(增强)"
+_MAIN_GRAPH = None
+
+
+def _get_main_graph():
+    """懒加载主图（含 Skill Registry 初始化）"""
+    global _MAIN_GRAPH
+    if _MAIN_GRAPH is None:
+        import asyncio
+        # agent 项目根目录（agent/），主图代码在此
+        agent_root = PROJECT_ROOT.parent
+        if str(agent_root) not in sys.path:
+            sys.path.insert(0, str(agent_root))
+        from skills.init import init_skill_registry
+        from graph import get_graph
+        asyncio.run(init_skill_registry())
+        _MAIN_GRAPH = get_graph()
+    return _MAIN_GRAPH
+
+
+def _run_main_agent(message: str, trace_id: str = "") -> dict[str, Any]:
+    """调用增强主图，返回与 generated agent 一致的 dict 结构"""
+    graph = _get_main_graph()
+    state = {
+        "session_id": trace_id or "web", "user_message": message,
+        "plan": [], "current_task_idx": 0, "tool_results": [],
+        "step_outputs": {}, "final_response": "", "error": None, "messages": [],
+    }
+    out = graph.invoke(state)
+    return {
+        "response": out.get("final_response", ""),
+        "plan": out.get("plan", []),
+        "tool_results": out.get("tool_results", []),
+        "error": out.get("error"),
+        "trace_id": trace_id,
+    }
+
 
 def published_agent_names() -> list[str]:
-    """获取当前所有已发布的 agent 名称列表"""
-    return list(list_agents().keys())
+    """获取可选 Agent 列表：主智能体始终排首位，其后是已发布的生成式 agent"""
+    return [MAIN_AGENT_NAME] + list(list_agents().keys())
 
 
 def _get_run(name: str):
     """获取 agent 的 run 函数（带缓存）"""
+    if name == MAIN_AGENT_NAME:
+        return _run_main_agent
     if name in _RUN_CACHE:
         return _RUN_CACHE[name]
     run_fn = load_agent_run(name)
@@ -114,6 +155,12 @@ def reload_agent(name: str) -> str:
     """
     if not name:
         return "❌ 请选择一个 Agent"
+
+    # 主智能体：重置主图缓存，下次调用会重新初始化 Skill Registry + 图
+    if name == MAIN_AGENT_NAME:
+        global _MAIN_GRAPH
+        _MAIN_GRAPH = None
+        return f"✅ 已重置 `{name}`（下次对话将重新加载 Skill Registry 和主图）"
 
     # 清除缓存
     _RUN_CACHE.pop(name, None)

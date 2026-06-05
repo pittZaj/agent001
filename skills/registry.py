@@ -89,8 +89,14 @@ class SkillRegistry:
                 return result
 
             elif skill.skill_type == SkillType.SUBGRAPH:
-                # 子图调用（待实现）
-                return {"error": "subgraph not implemented yet"}
+                # 子图调用：实现可以是 async 函数或可调用的编译图
+                if skill.implementation is None:
+                    return {"error": f"subgraph {skill_id} has no implementation"}
+                if asyncio.iscoroutinefunction(skill.implementation):
+                    result = await skill.implementation(args, context or {})
+                else:
+                    result = skill.implementation(args, context or {})
+                return result
 
             else:
                 return {"error": f"unsupported skill type: {skill.skill_type}"}

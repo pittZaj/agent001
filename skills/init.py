@@ -119,6 +119,14 @@ async def init_skill_registry():
     # 注册 MCP 工具（直接调用实现）
     register_mcp_tools_as_local(registry)
 
+    # 注册复判子图（多模态 VLM 复判，支持 8 类告警）
+    from skills.vlm_judge_subgraph import register_vlm_judge_skill
+    register_vlm_judge_skill(registry)
+
+    # 注册告警业务 Skills（聚合统计 / 可视化 / 录像回溯 / 状态回写）
+    from skills.alarm_skills import register_alarm_skills
+    register_alarm_skills(registry)
+
     logger.info(f"Skill Registry 初始化完成，共注册 {len(registry.list_skills())} 个 Skill")
 
     return registry

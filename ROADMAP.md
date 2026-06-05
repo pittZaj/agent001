@@ -29,29 +29,36 @@
 
 #### 3.2.1 候选方案对比
 
-| 平台 | 特点 | 优势 | 劣势 | 推荐度 |
+| 方案 | 特点 | 优势 | 劣势 | 推荐度 |
 |------|------|------|------|--------|
-| **RAGFlow** | 深度文档解析、RAG 效果好 | ✅ PDF 解析强<br>✅ Citation 完整<br>✅ 私有化部署 | ❌ 部署略重 | ⭐⭐⭐⭐⭐ |
-| **MaxKB** | 轻量、中文友好 | ✅ 部署简单<br>✅ 1Panel 生态<br>✅ 中小规模适用 | ❌ 高级 RAG 功能少 | ⭐⭐⭐⭐ |
-| **Dify** | 知识库 + Agent 工作流 | ✅ 低代码配置<br>✅ 社区活跃 | ❌ 与现有架构重叠 | ⭐⭐⭐ |
-| **自建 (Qdrant + LangChain)** | 完全自控 | ✅ 灵活定制<br>✅ 无黑盒 | ❌ 开发成本高<br>❌ 需运维向量库 | ⭐⭐ |
+| **自建轻量方案** | Qdrant + Unstructured + FastEmbed | ✅ 轻量（< 2GB）<br>✅ 无冗余组件<br>✅ Python SDK 直接集成<br>✅ 完全可控 | ❌ 需自己实现文档管理<br>❌ 开发工作量 3-5 天 | ⭐⭐⭐⭐⭐ |
+| **RAGFlow** | 全功能 RAG 平台 | ✅ PDF 解析强<br>✅ Citation 完整<br>✅ 开箱即用 | ❌ **部署冗余**（8-10GB）<br>❌ 包含工作流/UI 等不需要的功能 | ⭐⭐ |
+| **MaxKB** | 轻量 KB 平台 | ✅ 部署相对简单<br>✅ 中文友好 | ❌ **仍然冗余**（6-8GB）<br>❌ 包含 Agent 等不需要的功能 | ⭐⭐ |
+| **LightRAG** | 轻量知识图谱 RAG | ✅ 开箱即用<br>✅ 知识图谱增强 | ❌ 项目较新（2025）<br>❌ 生产案例少 | ⭐⭐⭐ |
 
 #### 3.2.2 推荐方案
 
-**首选**: **RAGFlow** (https://github.com/infiniflow/ragflow)
+**首选**: **自建轻量方案** (Qdrant + Unstructured + FastEmbed)
 
 **理由**:
-1. ✅ **文档解析能力强**: 规章制度多为复杂 PDF，RAGFlow 的深度解析效果好
-2. ✅ **Citation 支持**: 能返回原文片段和页码，便于审计
-3. ✅ **私有化部署**: Docker Compose 一键拉起
-4. ✅ **API 友好**: RESTful API 易于集成
-5. ✅ **成熟度高**: 商业级产品开源，稳定性好
+1. ✅ **轻量化**: 资源占用 < 2GB（RAGFlow 需 8-10GB）
+2. ✅ **无冗余**: 只有知识库核心功能（RAGFlow/MaxKB 包含工作流、UI 等不需要的模块）
+3. ✅ **易集成**: Python SDK 直接调用，无需 HTTP 层（与 Skill Registry 无缝集成）
+4. ✅ **完全可控**: 每个组件独立可替换（Embedding、重排序、向量库）
+5. ✅ **文档解析强**: Unstructured 专为 RAG 设计，支持复杂 PDF 表格、多栏布局
+6. ✅ **生产成熟**: Qdrant 已被大量生产环境验证
 
-**备选**: **MaxKB** (轻量场景)
+**为什么不推荐 RAGFlow/MaxKB？**
+- ❌ **过于冗余**: 我们只需要知识库功能，但这些平台包含完整的智能体系统（工作流、对话、Agent 管理）
+- ❌ **资源浪费**: 需要部署 5 个服务（Elasticsearch/MySQL/MinIO/Redis/前端），占用 8-10GB 内存
+- ❌ **无法拆分**: 无法单独部署知识库模块，必须部署完整平台
+- ❌ **架构冲突**: 我们已有 LangGraph 编排层，再部署一个完整平台会造成功能重叠
+
+**备选**: 如果时间极度紧迫（< 1天），可考虑 **LightRAG** 快速验证
 
 ### 3.3 集成架构
 
-#### 3.3.1 架构设计
+#### 3.3.1 架构设计（自建轻量方案）
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -69,18 +76,508 @@
 └───────────────┼────────────────────────────────────┘
                 │
 ┌───────────────▼────────────────────────────────────┐
-│  KB Adapter (适配器模式)                            │
-│  - RagflowAdapter: 封装 RAGFlow API                │
-│  - MaxKBAdapter: 封装 MaxKB API (备选)             │
-└───────────────┬────────────────────────────────────┘
+│  KB Service (Python 服务)                           │
+│  ┌────────────────────────────────────────────┐    │
+│  │ upload_document()  - 文档上传与解析        │    │
+│  │ search()          - 语义检索 + 重排序      │    │
+│  │ delete()          - 文档删除               │    │
+│  └────────────┬───────────────────────────────┘    │
+└───────────────┼────────────────────────────────────┘
                 │
-┌───────────────▼────────────────────────────────────┐
-│  RAGFlow 知识库                                     │
-│  - Dataset: safety_regulations                     │
-│  - Embedding: bge-m3                               │
-│  - Reranker: bge-reranker-v2-m3                    │
-└────────────────────────────────────────────────────┘
+     ┌──────────┼──────────┬──────────┐
+     │          │          │          │
+┌────▼────┐ ┌──▼─────┐ ┌──▼─────┐ ┌──▼────────┐
+│Qdrant   │ │Unstruct│ │FastEmbed│ │BGE-Rerank │
+│(向量库) │ │(解析)  │ │(Embed) │ │(重排序)   │
+└─────────┘ └────────┘ └────────┘ └───────────┘
 ```
+
+#### 3.3.2 技术栈详解
+
+**1. Qdrant（向量数据库）**
+- **部署**: 单 Docker 容器
+- **资源**: < 1GB 内存（百万级向量）
+- **API**: gRPC + HTTP + Python SDK
+- **特性**: 过滤、混合检索、payload 索引
+
+**2. Unstructured（文档解析）**
+- **能力**: 复杂 PDF 表格、多栏布局、阅读顺序保留
+- **支持格式**: PDF、Word、PPT、HTML
+- **策略**: `hi_res`（高精度，适合规章制度）
+
+**3. FastEmbed（Embedding）**
+- **模型**: BGE-M3（多语言、多任务）
+- **优势**: 轻量、无需独立服务
+- **集成**: Qdrant 官方库
+
+**4. BGE-reranker-v2-m3（重排序）**
+- **作用**: 精排 top_k 结果
+- **库**: FlagEmbedding
+- **支持**: 中英文跨语言
+
+---
+
+### 3.4 实现代码示例
+
+#### 3.4.1 KB Service 实现
+
+```python
+# utils/kb/service.py
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from langchain_community.document_loaders import UnstructuredFileLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from fastembed import TextEmbedding
+from FlagEmbedding import FlagReranker
+import uuid
+from typing import List, Dict, Any
+
+class KnowledgeBaseService:
+    def __init__(self, qdrant_host: str = "localhost", qdrant_port: int = 6333):
+        self.client = QdrantClient(host=qdrant_host, port=qdrant_port)
+        self.embedding = TextEmbedding("BAAI/bge-m3")
+        self.reranker = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=True)
+        self.collection_name = "safety_regulations"
+        
+        # 初始化 collection
+        self._init_collection()
+    
+    def _init_collection(self):
+        """初始化 Qdrant collection"""
+        collections = self.client.get_collections().collections
+        if self.collection_name not in [c.name for c in collections]:
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
+            )
+    
+    def upload_document(self, file_path: str, metadata: Dict[str, Any]) -> str:
+        """上传文档到知识库
+        
+        Args:
+            file_path: 文档路径 (PDF/Word)
+            metadata: 元数据 (title, category, version, etc.)
+        
+        Returns:
+            doc_id: 文档唯一标识
+        """
+        # 1. 文档解析
+        loader = UnstructuredFileLoader(
+            file_path,
+            strategy="hi_res",  # 高精度解析
+            mode="elements"     # 保留元素结构
+        )
+        docs = loader.load()
+        
+        # 2. 文本分块
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", "。", "；", "，"]
+        )
+        chunks = splitter.split_documents(docs)
+        
+        # 3. Embedding
+        texts = [chunk.page_content for chunk in chunks]
+        vectors = list(self.embedding.embed(texts))
+        
+        # 4. 存储到 Qdrant
+        doc_id = str(uuid.uuid4())
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vec,
+                payload={
+                    "text": chunk.page_content,
+                    "doc_id": doc_id,
+                    "chunk_index": i,
+                    "metadata": metadata
+                }
+            )
+            for i, (chunk, vec) in enumerate(zip(chunks, vectors))
+        ]
+        
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=points
+        )
+        
+        return doc_id
+    
+    def search(self, query: str, top_k: int = 5, filter_dict: Dict = None) -> List[Dict]:
+        """语义检索
+        
+        Args:
+            query: 查询文本
+            top_k: 返回结果数
+            filter_dict: 过滤条件 (如 {"metadata.category": "安全规定"})
+        
+        Returns:
+            chunks: 条文片段列表
+        """
+        # 1. 向量检索（召回 20 条）
+        query_vec = list(self.embedding.embed([query]))[0]
+        
+        results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=query_vec,
+            limit=20,
+            query_filter=filter_dict
+        )
+        
+        # 2. 重排序（精排 top_k）
+        docs = [r.payload["text"] for r in results]
+        pairs = [[query, doc] for doc in docs]
+        scores = self.reranker.compute_score(pairs)
+        
+        # 3. 排序并返回
+        reranked = sorted(
+            zip(results, scores),
+            key=lambda x: x[1],
+            reverse=True
+        )[:top_k]
+        
+        return [
+            {
+                "text": r.payload["text"],
+                "score": float(score),
+                "doc_id": r.payload["doc_id"],
+                "chunk_index": r.payload["chunk_index"],
+                "metadata": r.payload["metadata"]
+            }
+            for r, score in reranked
+        ]
+    
+    def delete_document(self, doc_id: str) -> bool:
+        """删除文档"""
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector={"doc_id": doc_id}
+        )
+        return True
+```
+
+#### 3.4.2 Skill 注册
+
+```python
+# skills/knowledge_base.py
+from utils.kb.service import KnowledgeBaseService
+from skills.base import Skill, SkillType
+from skills.registry import SkillRegistry
+
+# 全局 KB Service 实例
+kb_service = None
+
+def get_kb_service() -> KnowledgeBaseService:
+    global kb_service
+    if kb_service is None:
+        kb_service = KnowledgeBaseService()
+    return kb_service
+
+
+async def kb_regulation_impl(args: dict, context: dict) -> dict:
+    """规章制度检索 Skill"""
+    query = args["query"]
+    top_k = args.get("top_k", 5)
+    category = args.get("category")
+    
+    try:
+        kb = get_kb_service()
+        
+        # 构造过滤条件
+        filter_dict = None
+        if category:
+            filter_dict = {"metadata.category": category}
+        
+        results = kb.search(query, top_k, filter_dict)
+        
+        return {
+            "regulations": [
+                {
+                    "title": r["metadata"].get("title", "未命名"),
+                    "content": r["text"],
+                    "page": r["metadata"].get("page"),
+                    "score": r["score"],
+                    "category": r["metadata"].get("category")
+                }
+                for r in results
+            ],
+            "total": len(results)
+        }
+    except Exception as e:
+        return {"error": f"KB search failed: {e}"}
+
+
+def register_kb_skill(registry: SkillRegistry):
+    """注册知识库 Skill"""
+    skill = Skill(
+        id="kb_regulation",
+        name="规章制度检索",
+        description="检索安全生产规章制度文档，返回相关条文片段",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "查询关键词（如：未戴安全帽、抽烟违规）"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回结果数量",
+                    "default": 5
+                },
+                "category": {
+                    "type": "string",
+                    "description": "文档分类过滤（可选）",
+                    "enum": ["安全规定", "操作规程", "应急预案"]
+                }
+            },
+            "required": ["query"]
+        },
+        implementation=kb_regulation_impl,
+        skill_type=SkillType.TOOL,
+        tags=["knowledge", "regulation", "rag"]
+    )
+    registry.register(skill)
+```
+
+#### 3.4.3 FastAPI 文档管理接口（可选）
+
+```python
+# main.py 新增路由
+from fastapi import FastAPI, UploadFile, File
+from utils.kb.service import get_kb_service
+
+app = FastAPI()
+
+@app.post("/api/v1/kb/documents")
+async def upload_kb_document(
+    file: UploadFile = File(...),
+    title: str = None,
+    category: str = None
+):
+    """上传规章制度文档"""
+    kb = get_kb_service()
+    
+    # 保存临时文件
+    temp_path = f"/tmp/{file.filename}"
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    
+    # 上传到知识库
+    doc_id = kb.upload_document(
+        file_path=temp_path,
+        metadata={
+            "title": title or file.filename,
+            "category": category or "其他",
+            "filename": file.filename
+        }
+    )
+    
+    return {"doc_id": doc_id, "status": "success"}
+
+
+@app.delete("/api/v1/kb/documents/{doc_id}")
+async def delete_kb_document(doc_id: str):
+    """删除文档"""
+    kb = get_kb_service()
+    success = kb.delete_document(doc_id)
+    return {"success": success}
+
+
+@app.post("/api/v1/kb/search")
+async def search_kb(query: str, top_k: int = 5, category: str = None):
+    """检索知识库（调试用）"""
+    kb = get_kb_service()
+    filter_dict = {"metadata.category": category} if category else None
+    results = kb.search(query, top_k, filter_dict)
+    return {"results": results}
+```
+
+---
+
+### 3.5 配置文件
+
+```yaml
+# config.yaml
+rag:
+  enabled: true
+  qdrant:
+    host: "localhost"
+    port: 6333
+  
+  embedding:
+    model: "BAAI/bge-m3"
+    device: "cuda"  # 或 "cpu"
+  
+  reranker:
+    model: "BAAI/bge-reranker-v2-m3"
+    use_fp16: true
+  
+  chunking:
+    chunk_size: 500
+    chunk_overlap: 50
+```
+
+---
+
+### 3.6 实施步骤
+
+#### P0: 基础搭建（1-2 天）
+
+**任务清单**:
+- [ ] 部署 Qdrant Docker 容器
+- [ ] 安装依赖（qdrant-client, unstructured, fastembed, FlagEmbedding）
+- [ ] 安装文档解析依赖（poppler-utils, tesseract-ocr）
+- [ ] 实现 KB Service 基础类
+- [ ] 测试文档上传与向量存储
+- [ ] 测试检索功能
+
+**验证标准**:
+```bash
+# 1. Qdrant 正常运行
+curl http://localhost:6333/collections
+
+# 2. 上传测试文档
+python test_kb_upload.py
+
+# 3. 检索测试
+python test_kb_search.py "未戴安全帽违规"
+```
+
+#### P1: Skill 集成（2 天）
+
+**任务清单**:
+- [ ] 实现 `kb_regulation_impl` 函数
+- [ ] 注册到 Skill Registry
+- [ ] 更新 `skills/init.py`
+- [ ] 编写单元测试
+- [ ] Planner 能发现并调用该 Skill
+
+**验证标准**:
+```python
+# 1. Registry 包含 kb_regulation
+from skills import get_skill_registry
+registry = get_skill_registry()
+assert "kb_regulation" in [s.id for s in registry.list_skills()]
+
+# 2. 能正常调用
+result = await registry.invoke("kb_regulation", {"query": "安全帽规定"})
+assert "regulations" in result
+```
+
+#### P2: 文档管理接口（1 天）
+
+**任务清单**:
+- [ ] FastAPI 路由：上传/删除/检索
+- [ ] 文件类型校验（PDF/Word）
+- [ ] 元数据管理（title, category, version）
+- [ ] Swagger 文档
+
+**验证标准**:
+```bash
+# 上传文档
+curl -X POST http://localhost:8000/api/v1/kb/documents \
+  -F "file=@规章制度.pdf" \
+  -F "title=安全生产规定" \
+  -F "category=安全规定"
+
+# 检索测试
+curl -X POST http://localhost:8000/api/v1/kb/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "未戴安全帽", "top_k": 5}'
+```
+
+#### P3: 端到端测试（2 天）
+
+**任务清单**:
+- [ ] 准备测试文档（5-10份规章制度 PDF）
+- [ ] 批量上传文档
+- [ ] 文本查询测试："未戴安全帽违反哪些规定？"
+- [ ] 图片识别 + KB 联动测试（集成 VLM）
+- [ ] 验证 Citation 完整性（文本+页码）
+- [ ] 性能测试（检索延迟 < 500ms）
+- [ ] 准确率评估（人工标注 20 个查询，准确率 > 80%）
+
+**验收标准**:
+```bash
+# 端到端测试
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "test",
+    "message": "未戴安全帽违反哪些规定？"
+  }'
+
+# 预期响应包含：
+# - 具体条文内容
+# - 文档标题
+# - 页码
+# - 相似度评分
+```
+
+#### P4: 优化与文档（可选，1 天）
+
+**任务清单**:
+- [ ] 调优分块策略（chunk_size, overlap）
+- [ ] 调优重排序阈值
+- [ ] 添加缓存（Redis）
+- [ ] 性能监控（检索耗时、召回率）
+- [ ] 更新 DEVELOPER_GUIDE.md（KB 使用说明）
+- [ ] 编写运维文档（Qdrant 备份、恢复）
+
+---
+
+### 3.7 部署清单
+
+**依赖安装**:
+```bash
+# 系统依赖
+apt-get update
+apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-chi-sim
+
+# Python 依赖
+pip install qdrant-client==1.7.0
+pip install langchain-community==0.0.38
+pip install unstructured[pdf]==0.12.0
+pip install fastembed==0.2.0
+pip install FlagEmbedding==1.2.8
+
+# Qdrant 部署
+docker run -d \
+  --name qdrant \
+  -p 6333:6333 \
+  -p 6334:6334 \
+  -v $(pwd)/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant:latest
+```
+
+**资源需求**:
+- **CPU**: 4 核
+- **内存**: 8GB（Qdrant 1GB + Embedding 模型 2GB + 应用 2GB + 余量 3GB）
+- **磁盘**: 20GB（文档 + 向量存储）
+- **GPU**: 可选（加速 Embedding 和 Reranker，推荐 8GB+ 显存）
+
+---
+
+### 3.8 与 RAGFlow/MaxKB 方案对比
+
+| 对比项 | 自建轻量方案 | RAGFlow | MaxKB |
+|--------|-------------|---------|-------|
+| **资源占用** | < 2GB | 8-10GB | 6-8GB |
+| **部署复杂度** | ⭐ Docker 1个 | ⭐⭐⭐⭐ Docker 5个 | ⭐⭐⭐ Docker 3个 |
+| **依赖服务** | Qdrant | ES+MySQL+MinIO+Redis | MySQL+ES |
+| **功能冗余** | ✅ 无 | ❌ 工作流/UI/Agent | ❌ Agent/对话 |
+| **开发工作量** | 3-5天 | 1天（部署） | 1天（部署） |
+| **集成方式** | Python SDK | HTTP API | HTTP API |
+| **可控性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+| **文档解析质量** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **扩展性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+| **运维成本** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+
+**结论**: 对于我们的需求（只需知识库功能，已有 LangGraph 编排），**自建轻量方案是最优选择**。
+
+---
 
 #### 3.3.2 适配器接口设计
 

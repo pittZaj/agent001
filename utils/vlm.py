@@ -108,6 +108,82 @@ class VLMClient:
             logger.error(f"VLM 调用失败: {e}")
             raise
 
+    def judge_alarm_type(
+        self,
+        display_name: str,
+        image_path: str | None = None,
+        image_base64: str | None = None,
+        model_conf: float | None = None,
+    ) -> Dict[str, Any]:
+        """
+        通用告警复判：判断图中是否存在指定类型的告警行为（支持全部 8 类）。
+
+        Args:
+            display_name: 告警类型中文名（如"未戴安全帽"、"明火/烟雾"）
+            image_path: 图片本地路径
+            image_base64: 图片 base64（优先级高于 image_path）
+            model_conf: 小模型原始置信度（可选，作为参考给 VLM）
+
+        Returns:
+            {"verdict": "confirmed"|"rejected"|"uncertain",
+             "exists": bool, "confidence": float, "reasoning": str}
+        """
+        # 准备图片
+        if image_base64:
+            image_url = image_base64 if image_base64.startswith("data:image") \
+                else f"data:image/jpeg;base64,{image_base64}"
+        elif image_path:
+            with open(image_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            image_url = f"data:image/jpeg;base64,{b64}"
+        else:
+            raise ValueError("必须提供 image_path 或 image_base64")
+
+        conf_hint = f"\n小模型初判置信度：{model_conf}" if model_conf is not None else ""
+        prompt = (
+            f"你是安全生产监控复判专家。请仔细观察图片，判断图中是否真实存在【{display_name}】这一情况。"
+            f"{conf_hint}\n\n"
+            "请严格按以下 JSON 格式返回，不要输出其他内容：\n"
+            '{"exists": true, "confidence": 0.0, "reasoning": "简要说明判断依据"}\n'
+            "其中 exists 为 true 表示确认存在该告警情况，false 表示不存在（误报）；"
+            "confidence 为你的判断置信度（0.0-1.0）。"
+        )
+
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+
+        import json as _json
+        import re as _re
+        try:
+            response = self.client.invoke(messages)
+            content = response.content
+            json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
+            if json_match:
+                result = _json.loads(json_match.group())
+                exists = bool(result.get("exists", False))
+                confidence = float(result.get("confidence", 0.5))
+                return {
+                    "verdict": "confirmed" if exists else "rejected",
+                    "exists": exists,
+                    "confidence": confidence,
+                    "reasoning": result.get("reasoning", content),
+                }
+            # 解析失败 → 不确定
+            return {
+                "verdict": "uncertain",
+                "exists": False,
+                "confidence": 0.5,
+                "reasoning": content,
+            }
+        except Exception as e:
+            logger.error(f"VLM judge_alarm_type 调用失败: {e}")
+            raise
+
 
 # 全局单例
 _vlm_client = None

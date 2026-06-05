@@ -16,6 +16,9 @@ class AgentState(TypedDict):
     # 工具调用结果
     tool_results: List[Dict[str, Any]]
 
+    # 步骤间传参：存储每个步骤的输出，供后续步骤引用
+    step_outputs: Dict[int, Any]  # {0: {...}, 1: {...}}
+
     # 最终响应
     final_response: str
 
