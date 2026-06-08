@@ -127,6 +127,10 @@ async def init_skill_registry():
     from skills.alarm_skills import register_alarm_skills
     register_alarm_skills(registry)
 
+    # 注册知识库检索 Skill（阶段3 RAG，规章制度联动）
+    from skills.kb.skill import register_kb_skill
+    register_kb_skill(registry)
+
     logger.info(f"Skill Registry 初始化完成，共注册 {len(registry.list_skills())} 个 Skill")
 
     return registry

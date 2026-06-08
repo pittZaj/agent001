@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from web import agent_chat, db_admin, job_manager, spec_helper  # noqa: E402
+from web.kb_manager import build_kb_tab  # noqa: E402
 from registry import list_agents, publish, unpublish  # noqa: E402
 
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
@@ -684,6 +685,9 @@ def build_ui():
                 clear_btn.click(chat_clear, outputs=[chatbot, debug_md])
                 refresh_agents_btn.click(refresh_published_dropdown, outputs=agent_dd)
                 reload_btn.click(reload_agent_action, inputs=agent_dd, outputs=reload_msg)
+
+            # Tab 7: 知识库管理（阶段3 RAG）
+            build_kb_tab()
 
     return demo
 
