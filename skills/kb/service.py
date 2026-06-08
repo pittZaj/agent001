@@ -26,11 +26,11 @@ from qdrant_client.models import (
     Filter, FieldCondition, MatchValue,
 )
 from langchain_community.document_loaders import UnstructuredFileLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from sentence_transformers import SentenceTransformer
 from FlagEmbedding import FlagReranker
 
-from .config import KBConfig, get_kb_config
+from .config import KBConfig, get_kb_config, ChunkStrategy, RetrievalMode
 
 VECTOR_DIM = 1024  # BGE-M3 输出维度
 
@@ -68,30 +68,57 @@ class KnowledgeBaseService:
         vecs = self.embedding.encode(texts, normalize_embeddings=True)
         return vecs.tolist()
 
-    def upload_document(self, file_path: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    def upload_document(
+        self,
+        file_path: str,
+        metadata: dict[str, Any],
+        chunk_strategy: ChunkStrategy | None = None,
+    ) -> dict[str, Any]:
         """上传文档：解析 → 分块 → 向量化 → 入库
 
         Args:
-            file_path: 文档路径 (PDF/Word/TXT)
+            file_path: 文档路径 (PDF/Word/TXT/Markdown)
             metadata: 元数据 {"title", "category", "filename"}
+            chunk_strategy: 分块策略，None 则用配置默认
 
         Returns:
             {"doc_id": str, "chunks_count": int}
         """
+        strategy = chunk_strategy or self.config.chunk_strategy
+
         # 1. 解析
         loader = UnstructuredFileLoader(file_path, mode="single")
         docs = loader.load()
         if not docs or not docs[0].page_content.strip():
             raise ValueError(f"文档解析为空: {file_path}")
 
-        # 2. 分块
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            separators=["\n\n", "\n", "。", "；", "，", " ", ""],
-        )
-        chunks = splitter.split_documents(docs)
-        texts = [ch.page_content.strip() for ch in chunks if ch.page_content.strip()]
+        full_text = docs[0].page_content.strip()
+
+        # 2. 分块（根据策略）
+        if strategy == ChunkStrategy.BY_PARAGRAPH:
+            # 按段落：双换行符分割
+            texts = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+        elif strategy == ChunkStrategy.BY_TITLE:
+            # 按标题层级（Markdown）：尝试用 MarkdownHeaderTextSplitter
+            try:
+                md_splitter = MarkdownHeaderTextSplitter(
+                    headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")]
+                )
+                md_docs = md_splitter.split_text(full_text)
+                texts = [d.page_content.strip() for d in md_docs if d.page_content.strip()]
+            except Exception:
+                # 不是 Markdown 或解析失败，降级为段落分割
+                texts = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+        else:
+            # 固定大小（默认）
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap,
+                separators=["\n\n", "\n", "。", "；", "，", " ", ""],
+            )
+            chunks = splitter.split_documents(docs)
+            texts = [ch.page_content.strip() for ch in chunks if ch.page_content.strip()]
+
         if not texts:
             raise ValueError(f"分块后无有效内容: {file_path}")
 
@@ -116,8 +143,9 @@ class KnowledgeBaseService:
             for i, (text, vec) in enumerate(zip(texts, vectors))
         ]
         self.client.upsert(collection_name=self.collection_name, points=points)
-        logger.info(f"上传文档 doc_id={doc_id}, chunks={len(points)}, title={metadata.get('title')}")
+        logger.info(f"上传文档 doc_id={doc_id}, chunks={len(points)}, strategy={strategy.value}, title={metadata.get('title')}")
         return {"doc_id": doc_id, "chunks_count": len(points)}
+
 
     # __SPLIT2__
 
@@ -126,17 +154,27 @@ class KnowledgeBaseService:
         query: str,
         top_k: int = 5,
         category: str | None = None,
+        retrieval_mode: RetrievalMode | None = None,
+        score_threshold: float | None = -1.0,
     ) -> list[dict[str, Any]]:
-        """语义检索 + 重排序
+        """检索 + 重排序
 
         Args:
             query: 查询文本
             top_k: 最终返回结果数
             category: 可选分类过滤
+            retrieval_mode: 检索模式（语义/混合），None 用配置默认
+            score_threshold: 重排序最低分；-1.0 表示用配置默认，None 表示不卡阈值
 
         Returns:
             检索结果列表（按重排序分数降序）
         """
+        mode = retrieval_mode or self.config.retrieval_mode
+        if score_threshold == -1.0:
+            threshold = self.config.score_threshold
+        else:
+            threshold = score_threshold
+
         # 1. 过滤条件
         query_filter = None
         if category:
@@ -144,17 +182,22 @@ class KnowledgeBaseService:
                 must=[FieldCondition(key="category", match=MatchValue(value=category))]
             )
 
-        # 2. 向量召回（top_k * 倍数）
+        # 2. 召回（语义向量）
+        recall_n = top_k * self.config.recall_multiplier
         query_vec = self._embed([query])[0]
         recall = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vec,
-            limit=top_k * self.config.recall_multiplier,
+            limit=recall_n,
             query_filter=query_filter,
             with_payload=True,
         ).points
         if not recall:
             return []
+
+        # 2b. 混合检索：补充关键词命中的分块（语义可能漏掉精确词）
+        if mode == RetrievalMode.HYBRID:
+            recall = self._hybrid_merge(query, recall, query_filter, recall_n)
 
         # 3. 重排序
         pairs = [[query, r.payload["text"]] for r in recall]
@@ -163,8 +206,8 @@ class KnowledgeBaseService:
             scores = [scores]
 
         reranked = sorted(zip(recall, scores), key=lambda x: x[1], reverse=True)
-        if self.config.score_threshold is not None:
-            reranked = [(r, s) for r, s in reranked if s >= self.config.score_threshold]
+        if threshold is not None:
+            reranked = [(r, s) for r, s in reranked if s >= threshold]
         reranked = reranked[:top_k]
 
         return [
@@ -178,6 +221,43 @@ class KnowledgeBaseService:
             }
             for r, score in reranked
         ]
+
+    def _hybrid_merge(self, query, recall, query_filter, recall_n):
+        """混合检索：在语义召回基础上补充关键词命中的分块。
+
+        用查询中的字/词在全库做 payload 文本匹配，把语义召回漏掉但
+        含精确关键词的分块补进候选集，再交给 reranker 统一排序。
+        """
+        existing_ids = {r.id for r in recall}
+        # 提取查询关键词（≥2 字的连续片段，简单分词）
+        import re
+        terms = [t for t in re.split(r"[\s，。；、？！,.?!]+", query) if len(t) >= 2]
+        if not terms:
+            return recall
+
+        extra = []
+        seen = set(existing_ids)
+        # 扫描全库分块，关键词命中则补入（限量，避免过大）
+        offset = None
+        while len(extra) < recall_n:
+            records, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=query_filter,
+                limit=256, offset=offset, with_payload=True, with_vectors=False,
+            )
+            for rec in records:
+                if rec.id in seen:
+                    continue
+                text = rec.payload.get("text", "")
+                if any(term in text for term in terms):
+                    extra.append(rec)
+                    seen.add(rec.id)
+                    if len(extra) >= recall_n:
+                        break
+            if offset is None:
+                break
+        return list(recall) + extra
+
 
     # __SPLIT3__
 
@@ -215,6 +295,57 @@ class KnowledgeBaseService:
                 break
         return list(docs.values())
 
+    def get_document_chunks(self, doc_id: str) -> list[dict[str, Any]]:
+        """获取某文档的所有分块内容（用于内容展示/编辑）"""
+        flt = Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
+        chunks = []
+        offset = None
+        while True:
+            records, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=flt,
+                limit=256, offset=offset, with_payload=True, with_vectors=False,
+            )
+            for r in records:
+                chunks.append({
+                    "point_id": r.id,
+                    "chunk_index": r.payload.get("chunk_index", 0),
+                    "text": r.payload.get("text", ""),
+                    "title": r.payload.get("title", ""),
+                    "category": r.payload.get("category", ""),
+                })
+            if offset is None:
+                break
+        chunks.sort(key=lambda x: x["chunk_index"])
+        return chunks
+
+    def update_chunk(self, point_id: str, new_text: str) -> bool:
+        """修改单个分块内容（重新向量化并更新）"""
+        # 取出原 payload
+        recs = self.client.retrieve(self.collection_name, ids=[point_id], with_payload=True)
+        if not recs:
+            raise ValueError(f"分块不存在: {point_id}")
+        payload = dict(recs[0].payload)
+        payload["text"] = new_text.strip()
+        vec = self._embed([new_text.strip()])[0]
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[PointStruct(id=point_id, vector=vec, payload=payload)],
+        )
+        logger.info(f"更新分块 point_id={point_id}")
+        return True
+
+    def clear_all(self) -> int:
+        """清空整个知识库（删除并重建 collection），返回清空前的向量数"""
+        try:
+            n = self.client.get_collection(self.collection_name).points_count
+        except Exception:
+            n = 0
+        self.client.delete_collection(self.collection_name)
+        self._init_collection()
+        logger.info(f"清空知识库 collection={self.collection_name}, 原向量数={n}")
+        return n
+
     def get_stats(self) -> dict[str, Any]:
         """知识库统计信息"""
         info = self.client.get_collection(self.collection_name)
@@ -223,4 +354,5 @@ class KnowledgeBaseService:
             "total_documents": len(self.list_documents()),
             "collection_name": self.collection_name,
         }
+
 

@@ -29,10 +29,18 @@ def kb_regulation_impl(args: dict, context: dict) -> dict:
 
     top_k = args.get("top_k", 5)
     category = args.get("category")
+    retrieval_mode = args.get("retrieval_mode")  # 可选：hybrid / semantic
+    score_threshold = args.get("score_threshold")  # 可选：0.0-1.0
 
     try:
+        from skills.kb import RetrievalMode
         kb = get_kb_service()
-        results = kb.search(query=query, top_k=top_k, category=category)
+        mode = RetrievalMode(retrieval_mode) if retrieval_mode else None
+        thresh = float(score_threshold) if score_threshold is not None else -1.0
+        results = kb.search(
+            query=query, top_k=top_k, category=category,
+            retrieval_mode=mode, score_threshold=thresh,
+        )
         return {
             "regulations": [
                 {
@@ -57,7 +65,8 @@ def register_kb_skill(registry):
         id="kb_regulation",
         name="规章制度检索",
         description="检索安全生产规章制度知识库，返回与查询最相关的条文片段及出处。"
-                    "适用于'未戴安全帽违反哪些规定''抽烟处罚标准'等规章查询。",
+                    "适用于'未戴安全帽违反哪些规定''抽烟处罚标准'等规章查询。"
+                    "支持混合检索（语义+关键词）、可调召回数与相似度阈值。",
         parameters={
             "type": "object",
             "properties": {
@@ -74,6 +83,15 @@ def register_kb_skill(registry):
                     "type": "string",
                     "description": "文档分类过滤（可选）",
                     "enum": ["安全规定", "操作规程", "应急预案", "管理制度"],
+                },
+                "retrieval_mode": {
+                    "type": "string",
+                    "description": "检索模式（可选）：hybrid=语义+关键词（默认，效果最好）; semantic=纯语义",
+                    "enum": ["hybrid", "semantic"],
+                },
+                "score_threshold": {
+                    "type": "number",
+                    "description": "相似度最低分（可选，0.5-0.7），低于此分的结果被过滤",
                 },
             },
             "required": ["query"],

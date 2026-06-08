@@ -7,6 +7,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class ChunkStrategy(str, Enum):
+    """分块策略"""
+    FIXED_SIZE = "fixed_size"       # 固定字符数（默认）
+    BY_PARAGRAPH = "by_paragraph"   # 按段落（\n\n 分割）
+    BY_TITLE = "by_title"           # 按标题层级（Markdown #）
+
+
+class RetrievalMode(str, Enum):
+    """检索模式"""
+    SEMANTIC = "semantic"           # 纯语义向量检索
+    HYBRID = "hybrid"               # 混合检索（语义+BM25关键词，效果最好）
 
 
 @dataclass
@@ -24,14 +38,16 @@ class KBConfig:
     # 设备：agent 环境中 5880 显卡的设备号为 cuda:0
     device: str = "cuda:0"
 
-    # 分块
-    chunk_size: int = 300
-    chunk_overlap: int = 50
+    # 分块策略与参数
+    chunk_strategy: ChunkStrategy = ChunkStrategy.FIXED_SIZE
+    chunk_size: int = 300            # 固定大小策略的字符数
+    chunk_overlap: int = 50          # 重叠字符数
 
-    # 检索
-    default_top_k: int = 5
-    recall_multiplier: int = 4   # 召回 top_k * 倍数 后重排
-    score_threshold: float | None = None  # reranker 输出 logit，默认不卡阈值
+    # 检索模式与参数
+    retrieval_mode: RetrievalMode = RetrievalMode.HYBRID  # 混合检索效果最好
+    default_top_k: int = 5           # 默认召回数量
+    recall_multiplier: int = 4       # 召回 top_k * 倍数 后重排
+    score_threshold: float | None = 0.5  # 重排序最低分（0.5-0.7，低了不相关内容会出现）
 
     # 上传文件暂存
     upload_dir: str = "/mnt/data3/clip/LangGraph/agent/data/kb_uploads"
@@ -40,4 +56,5 @@ class KBConfig:
 def get_kb_config() -> KBConfig:
     """获取知识库配置"""
     return KBConfig()
+
 
