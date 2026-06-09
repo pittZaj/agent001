@@ -15,6 +15,7 @@ class ChunkStrategy(str, Enum):
     FIXED_SIZE = "fixed_size"       # 固定字符数（默认）
     BY_PARAGRAPH = "by_paragraph"   # 按段落（\n\n 分割）
     BY_TITLE = "by_title"           # 按标题层级（Markdown #）
+    BY_SEPARATOR = "by_separator"   # 按特殊标记符分割（用户自定义）
 
 
 class RetrievalMode(str, Enum):

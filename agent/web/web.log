@@ -1,18 +1,6 @@
-Traceback (most recent call last):
-  File "/mnt/data3/clip/LangGraph/agent/agent/web/app.py", line 692, in <module>
-    demo = build_ui()
-  File "/mnt/data3/clip/LangGraph/agent/agent/web/app.py", line 422, in build_ui
-    with gr.Blocks(title="Agent-of-Agent 控制台", theme=gr.themes.Soft()) as demo:
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/blocks.py", line 1082, in __init__
-    self.queue()
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/blocks.py", line 2149, in queue
-    self.app = routes.App.create_app(self)
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/routes.py", line 276, in create_app
-    app = App(auth_dependency=auth_dependency, **app_kwargs)
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/gradio/routes.py", line 218, in __init__
-    super().__init__(**kwargs)
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/fastapi/applications.py", line 896, in __init__
-    ] = webhooks or routing.APIRouter()
-  File "/root/anaconda3/envs/agent/lib/python3.10/site-packages/fastapi/routing.py", line 835, in __init__
-    super().__init__(
-TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:423: DeprecationWarning: The 'theme' parameter in the Blocks constructor will be removed in Gradio 6.0. You will need to pass 'theme' to Blocks.launch() instead.
+  with gr.Blocks(title="Agent-of-Agent 控制台", theme=gr.themes.Soft()) as demo:
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:663: DeprecationWarning: The 'show_copy_button' parameter will be removed in Gradio 6.0. You will need to use 'buttons=["copy"]' instead.
+  chatbot = gr.Chatbot(
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:663: DeprecationWarning: The default value of 'allow_tags' in gr.Chatbot will be changed from False to True in Gradio 6.0. You will need to explicitly set allow_tags=False if you want to disable tags in your chatbot.
+  chatbot = gr.Chatbot(

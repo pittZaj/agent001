@@ -44,12 +44,32 @@ class KnowledgeBaseService:
 
         logger.info(f"初始化 KB Service: collection={c.collection_name}, device={c.device}")
         self.client = QdrantClient(host=c.qdrant_host, port=c.qdrant_port)
-        self.embedding = SentenceTransformer(c.embedding_model_path, device=c.device)
-        self.reranker = FlagReranker(c.reranker_model_path, use_fp16=True, devices=c.device)
         self.collection_name = c.collection_name
+        # 模型延迟加载：仅在真正需要向量化/重排时才占显存。
+        # 纯数据库操作（统计/列表/删除/清空/查看）无需加载模型，避免被模型加载问题波及。
+        self._embedding = None
+        self._reranker = None
 
         self._init_collection()
-        logger.info("KB Service 初始化完成")
+        logger.info("KB Service 初始化完成（模型延迟加载）")
+
+    @property
+    def embedding(self) -> SentenceTransformer:
+        """词嵌入模型（首次访问时加载）"""
+        if self._embedding is None:
+            c = self.config
+            logger.info(f"加载词嵌入模型 BGE-M3: {c.embedding_model_path} → {c.device}")
+            self._embedding = SentenceTransformer(c.embedding_model_path, device=c.device)
+        return self._embedding
+
+    @property
+    def reranker(self) -> FlagReranker:
+        """重排序模型（首次访问时加载）"""
+        if self._reranker is None:
+            c = self.config
+            logger.info(f"加载重排序模型 BGE-reranker: {c.reranker_model_path} → {c.device}")
+            self._reranker = FlagReranker(c.reranker_model_path, use_fp16=True, devices=c.device)
+        return self._reranker
 
     def _init_collection(self):
         """初始化 Qdrant collection（幂等）"""
@@ -68,11 +88,58 @@ class KnowledgeBaseService:
         vecs = self.embedding.encode(texts, normalize_embeddings=True)
         return vecs.tolist()
 
+    @staticmethod
+    def _chunk_fixed_size(text: str, size: int, overlap: int) -> list[str]:
+        """固定大小滑动窗口分块，保证相邻块重叠 overlap 字。
+
+        以 step = size - overlap 为步长滑动：块 i 取 text[i*step : i*step+size]，
+        因此每相邻两块尾首必然重叠 overlap 字（最后一块除外，可能不足）。
+        为减少在词语/数字中间硬切，会在窗口右边界附近就近的标点/换行处微调收尾。
+        """
+        if size <= 0:
+            raise ValueError("分块大小必须 > 0")
+        if overlap < 0 or overlap >= size:
+            raise ValueError(f"重叠字数必须满足 0 <= overlap < size，当前 size={size}, overlap={overlap}")
+
+        # 归一空白：折叠 3+ 连续换行，避免空块；不破坏正文
+        text = text.strip()
+        if not text:
+            return []
+
+        step = size - overlap
+        breakers = "。！？；\n，、 "  # 优先在这些位置收尾
+        chunks: list[str] = []
+        start = 0
+        n = len(text)
+        while start < n:
+            end = min(start + size, n)
+            # 若未到文末，尝试把 end 回退到最近的断句点（仅在窗口后 1/4 区间内找，避免块过短）
+            if end < n:
+                window_floor = start + max(1, (size * 3) // 4)
+                cut = -1
+                for j in range(end, window_floor, -1):
+                    if text[j - 1] in breakers:
+                        cut = j
+                        break
+                if cut != -1:
+                    end = cut
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= n:
+                break
+            # 下一块起点 = 本块实际结尾 - overlap（保证重叠），但至少前进 1 防死循环
+            start = max(end - overlap, start + 1)
+        return chunks
+
     def upload_document(
         self,
         file_path: str,
         metadata: dict[str, Any],
         chunk_strategy: ChunkStrategy | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        custom_separator: str | None = None,
     ) -> dict[str, Any]:
         """上传文档：解析 → 分块 → 向量化 → 入库
 
@@ -80,11 +147,16 @@ class KnowledgeBaseService:
             file_path: 文档路径 (PDF/Word/TXT/Markdown)
             metadata: 元数据 {"title", "category", "filename"}
             chunk_strategy: 分块策略，None 则用配置默认
+            chunk_size: 固定大小策略的分块字符数，None 则用配置默认
+            chunk_overlap: 固定大小策略的重叠字符数，None 则用配置默认
+            custom_separator: by_separator 策略的自定义分隔符（如 "****"），None 则不生效
 
         Returns:
             {"doc_id": str, "chunks_count": int}
         """
         strategy = chunk_strategy or self.config.chunk_strategy
+        size = chunk_size if chunk_size is not None else self.config.chunk_size
+        overlap = chunk_overlap if chunk_overlap is not None else self.config.chunk_overlap
 
         # 1. 解析
         loader = UnstructuredFileLoader(file_path, mode="single")
@@ -95,7 +167,12 @@ class KnowledgeBaseService:
         full_text = docs[0].page_content.strip()
 
         # 2. 分块（根据策略）
-        if strategy == ChunkStrategy.BY_PARAGRAPH:
+        if strategy == ChunkStrategy.BY_SEPARATOR:
+            # 按特殊标记符分割（用户自定义，如 ****）
+            if not custom_separator:
+                raise ValueError("by_separator 策略需要提供 custom_separator 参数")
+            texts = [p.strip() for p in full_text.split(custom_separator) if p.strip()]
+        elif strategy == ChunkStrategy.BY_PARAGRAPH:
             # 按段落：双换行符分割
             texts = [p.strip() for p in full_text.split("\n\n") if p.strip()]
         elif strategy == ChunkStrategy.BY_TITLE:
@@ -110,14 +187,10 @@ class KnowledgeBaseService:
                 # 不是 Markdown 或解析失败，降级为段落分割
                 texts = [p.strip() for p in full_text.split("\n\n") if p.strip()]
         else:
-            # 固定大小（默认）
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.config.chunk_size,
-                chunk_overlap=self.config.chunk_overlap,
-                separators=["\n\n", "\n", "。", "；", "，", " ", ""],
-            )
-            chunks = splitter.split_documents(docs)
-            texts = [ch.page_content.strip() for ch in chunks if ch.page_content.strip()]
+            # 固定大小（默认）：真正的滑动窗口，保证相邻块重叠 overlap 字。
+            # 不用 RecursiveCharacterTextSplitter —— 它先按分隔符切，overlap 仅靠
+            # 回并"前序短片段"实现；当段落/句子远长于 overlap 时无法回并，重叠会退化为 0。
+            texts = self._chunk_fixed_size(full_text, size, overlap)
 
         if not texts:
             raise ValueError(f"分块后无有效内容: {file_path}")
@@ -143,7 +216,14 @@ class KnowledgeBaseService:
             for i, (text, vec) in enumerate(zip(texts, vectors))
         ]
         self.client.upsert(collection_name=self.collection_name, points=points)
-        logger.info(f"上传文档 doc_id={doc_id}, chunks={len(points)}, strategy={strategy.value}, title={metadata.get('title')}")
+        extra_info = f"strategy={strategy.value}"
+        if strategy == ChunkStrategy.FIXED_SIZE:
+            extra_info += f", size={size}, overlap={overlap}"
+        elif strategy == ChunkStrategy.BY_SEPARATOR:
+            extra_info += f", separator={repr(custom_separator)}"
+        logger.info(
+            f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, title={metadata.get('title')}"
+        )
         return {"doc_id": doc_id, "chunks_count": len(points)}
 
 
