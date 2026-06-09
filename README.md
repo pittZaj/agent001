@@ -1,16 +1,27 @@
 # KSAgent - 安全生产场景 AI 智能体
 
 > 基于 LangGraph + Qwen3-VL + MCP 的多模态智能体平台  
-> **当前版本**: v2.0 (阶段2已完成)  
-> **最后更新**: 2026-06-04
+> **当前版本**: v3.1 (阶段3已完成 + 复杂任务编排验证通过)  
+> **最后更新**: 2026-06-09
 
 ---
 
 ## 📋 项目状态
 
 - ✅ **阶段1**: 最小可运行框架 - 已完成
-- ✅ **阶段2**: MCP 集成 + Skill Registry - 已完成（本版本）
-- 🚧 **阶段3**: RAG 知识库集成 - 规划中（2周）
+- ✅ **阶段2**: MCP 集成 + Skill Registry - 已完成
+- ✅ **阶段2.5**: 复杂任务编排能力验证 - 已完成（2026-06-05）
+  - 3个端到端Demo验证通过（VLM复判+可视化+多步编排）
+  - 步骤间传参增强（纯引用+混合字符串+嵌套字段）
+  - VLM复判子图泛化（支持8类告警）
+  - 只写MCP Server（受控回写+审计）
+- ✅ **阶段3**: RAG 知识库集成 - 已完成（2026-06-08）
+  - 自建轻量方案（Qdrant + BGE-M3 + reranker）
+  - kb_regulation Skill已注册，端到端验证通过
+  - 知识库管理Web界面（上传/检索/编辑/参数调优）
+- 🚧 **阶段2.5.1**: 真实平台对接 - 准备中
+  - MCP Server开发规范已完成（2026-06-09）
+  - 等待真实平台Schema与API文档
 - 📅 **阶段4**: Agent-of-Agent 平台化 - 规划中（2周）
 - 📅 **阶段5**: 生产优化 - 规划中（3周）
 
@@ -18,29 +29,39 @@
 
 ## 🎯 核心能力
 
-### 1. 多模态告警复判
-接收 YOLO 检测结果 + 原图，调用 Qwen3-VL-4B 进行二次确认
-- 支持场景：抽烟、安全帽、手机、口罩
+### 1. 多模态告警复判（已验证）
+接收 YOLO 检测结果 + 原图，调用 Qwen3-VL-4B-FP8 进行二次确认
+- **支持8类告警**：抽烟、未戴安全帽、手机使用、未戴口罩、跌倒、火灾烟雾、入侵、其他PPE违规
+- **端到端闭环**：VLM复判 → verdict自动映射（confirmed→closed / rejected→false_alarm）→ 回写数据库 + 审计日志
+- **泛化子图**：vlm_judge_subgraph 支持任意告警类型，prompt工程优化
 - 每图 ≤1 次 VLM 调用（成本优化）
-- 置信度评分 + 违规条款联动
 
-### 2. 自然语言操作（Plan-Execute）
+### 2. 自然语言操作（Plan-Execute，已增强）
 文字/语音输入 → LLM 动态规划 → 自动调用工具 → 汇总响应
-- **Planner**: 从 Skill Registry 动态读取可用工具
-- **Executor**: 通过 Registry 统一调用（MCP/本地/子图）
+- **Planner**: 从 Skill Registry 动态读取可用工具（含RAG）
+- **Executor**: 通过 Registry 统一调用（MCP/本地/子图），支持复杂步骤间传参
+  - 纯引用：`{{step_0.field}}` 保留原类型（list/dict/int）
+  - 混合字符串：`"告警ID是 {{step_0.uuid}}"` 自动拼接
+  - 嵌套字段：`{{step_0.data.items[0].id}}` 多层访问
 - **可观测**: 计划与执行步骤完整审计
+- **Formatter**: 智能压缩中间结果（自动剥离image_base64等大对象，避免超token上限）
 
-### 3. 数据访问控制（MCP 协议）
+### 3. 数据访问控制（MCP 协议，读写分离）
 **阶段2核心改进**: 数据库访问从硬编码 SQL 改为 MCP 协议控制
-- ✅ 表级白名单（alarms, persons, video_clips）
+- ✅ 表级白名单（alarms, persons, video_clips, audit_log）
 - ✅ 字段级白名单（隐藏敏感字段如 id_card, phone）
-- ✅ 只读模式（防止误操作）
-- ✅ 审计日志（所有调用记录）
+- ✅ 只读/只写分离：ksipms_server (只读) + ksipms_write_server (受控回写)
+- ✅ 审计日志（读操作best-effort，写操作强制记录，失败则回滚）
+- ✅ MCP Server开发规范（`plan/MCP_SERVER_SPECIFICATION.md`，指导真实平台对接）
 
-### 4. 知识库联动（阶段3规划）
+### 4. 知识库联动（阶段3已完成）
 RAG 查询规章制度，结合图像识别结果给出违规条款
-- 推荐方案：RAGFlow（深度文档解析、Citation 支持）
-- 备选方案：MaxKB（轻量、中文友好）
+- **技术方案**: 自建轻量方案（Qdrant + BGE-M3 + BGE-reranker-v2-m3），资源占用 < 2GB
+- **kb_regulation Skill**: 已注册，Planner自动识别是否需要检索知识库
+- **混合检索**: 语义 + 关键词，效果优于纯语义
+- **分块策略**: fixed_size（真正滑动窗口，保证重叠）/ by_paragraph / by_title / by_separator（自定义标记符）
+- **知识库管理Web**: 上传/检索/编辑分块/参数调优/统计
+- **端到端验证**: 已通过（用户问"未戴安全帽违反哪些规定？"→ 返回条文+处罚标准，无幻觉）
 
 ---
 
@@ -97,11 +118,11 @@ RAG 查询规章制度，结合图像识别结果给出违规条款
 |---|---|---|
 | **Web 框架** | FastAPI 0.115+ | 异步 API、自动 OpenAPI 文档 |
 | **智能体编排** | LangGraph 0.2+ | Plan-Execute 模式、状态图 |
-| **LLM 后端** | Qwen3-VL-4B (vLLM) | `http://127.0.0.1:8002/v1` |
-| **工具协议** | MCP (Model Context Protocol) | 数据访问权限控制（**阶段2新增**） |
-| **工具管理** | Skill Registry | 统一注册表（**阶段2新增**） |
-| **知识库** | RAGFlow (规划中) | 规章制度文档检索 |
-| **数据库** | SQLite 3 | 告警、人员、录像数据 |
+| **VLM 后端** | Qwen3-VL-4B-FP8 (vLLM) | `http://127.0.0.1:8004/v1` (FP8量化) |
+| **工具协议** | MCP (Model Context Protocol) | 数据访问权限控制（读写分离） |
+| **工具管理** | Skill Registry | 统一注册表，动态发现 |
+| **知识库** | Qdrant + BGE-M3 + reranker | 自建轻量方案（已完成） |
+| **数据库** | SQLite 3 | 告警、人员、录像、审计数据 |
 | **语音** | Whisper / FunASR | 语音转文字（待接入） |
 
 ---
@@ -156,6 +177,37 @@ agent/
     └── test_e2e_simple.py       # 简单端到端测试
 
 ```
+
+### 4. RAG 知识库集成（已完成）
+规章制度知识库查询，智能体可引用条文回答问题
+- **技术方案**：自建轻量方案（Qdrant + BGE-M3 + BGE-reranker-v2-m3），资源占用 < 2GB
+- **kb_regulation Skill**：已注册到Skill Registry，Planner自动识别是否需要检索
+- **混合检索**：语义 + 关键词，效果优于纯语义（retrieval_mode=hybrid）
+- **分块策略**：
+  - fixed_size：固定字数（可调大小+重叠，真正的滑动窗口保证重叠）
+  - by_paragraph：按段落
+  - by_title：按Markdown标题层级
+  - by_separator：按特殊标记符（如 `****`）
+- **知识库管理Web界面**：
+  - 上传文档（PDF/Word/Markdown/TXT）
+  - 检索测试（参数调优：召回数、检索模式、相似度阈值）
+  - 查看/编辑分块（支持逐块修改并重新向量化）
+  - 统计信息（文档数、向量数）
+- **端到端验证**：用户问"未戴安全帽违反哪些规定？" → Planner自动调用kb_regulation → 返回条文+处罚标准，无幻觉
+- **已上传文档**：安全生产管理规定（覆盖8类告警）+ 员工手册（日常管理制度）
+
+### 5. 数据可视化（已验证）
+Matplotlib生成统计图表，自动压缩base64传递
+- **聚合统计**：aggregate_alarms（按类型、日期、区域聚合）
+- **可视化**：visualize_alarms（柱状图、折线图、饼图）
+- **大对象剥离**：formatter自动剥离image_base64（28KB+），只保留占位符，避免超token上限
+
+### 6. 复杂任务编排（已验证）
+多步骤、跨模态、需回写、需可视化的真实业务链路
+- **Demo 1**：统计+可视化（聚合→画图→自然语言回复）
+- **Demo 2**：复判闭环（VLM推理→verdict映射→回写数据库+审计）
+- **Demo 3**：告警+规章联动（VLM识别违规→查知识库→处罚建议）
+- **已验证场景**：从"单步工具调用"升级为"多步骤、跨模态、需回写、需可视化"的真实业务链路
 
 ---
 
@@ -510,11 +562,29 @@ result = await registry.invoke(
 
 ## 📚 文档导航
 
-- **[ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)** - 阶段2架构设计说明
+### 日常开发
+- **[DEVELOPER_GUIDE_new.md](DEVELOPER_GUIDE_new.md)** - 开发操作手册（Skill/MCP/智能体开发，60+ 代码示例）
+- **[plan/QUICK_START.md](plan/QUICK_START.md)** - 快速启动指南（5 分钟体验 3 个 Demo）
+- **[plan/WEB_RESTART_GUIDE.md](plan/WEB_RESTART_GUIDE.md)** - Web 服务重启指南
+
+### 架构理解
+- **[ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)** - 阶段2架构设计说明（MCP/Skill Registry/Plan-Execute）
+- **[plan/COMPLEXITY_VALIDATION_PLAN.md](plan/COMPLEXITY_VALIDATION_PLAN.md)** - 复杂任务编排实施规划
+- **[plan/RAG_IMPLEMENTATION_PLAN.md](plan/RAG_IMPLEMENTATION_PLAN.md)** - RAG 知识库集成实施文档
+
+### 项目管理
 - **[ROADMAP.md](ROADMAP.md)** - 后期任务规划（阶段3-5）
-- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - 开发操作手册
 - **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** - 文档索引
 - **[STAGE2_SUMMARY.md](STAGE2_SUMMARY.md)** - 阶段2完成总结
+- **[plan/DELIVERY_SUMMARY.md](plan/DELIVERY_SUMMARY.md)** - 复杂任务编排验证交付总结
+- **[plan/RAG_COMPLETION_SUMMARY.md](plan/RAG_COMPLETION_SUMMARY.md)** - RAG 知识库集成完成总结
+
+### 平台对接
+- **[plan/MCP_SERVER_SPECIFICATION.md](plan/MCP_SERVER_SPECIFICATION.md)** - MCP Server 开发规范与对接指南（13,000字，含完整示例）
+- **[plan/PLATFORM_INTEGRATION_ASSESSMENT.md](plan/PLATFORM_INTEGRATION_ASSESSMENT.md)** - 平台对接 vs RAG 集成技术评估
+
+### 演示测试
+- **[plan/RAG_DEMO_TEST_CASES.md](plan/RAG_DEMO_TEST_CASES.md)** - RAG 知识库联动演示测试用例（20+ 用例）
 
 ---
 
@@ -604,5 +674,5 @@ print([s.id for s in skills])
 ---
 
 **项目维护**: KSAgent 开发团队  
-**最后更新**: 2026-06-04  
-**版本**: v2.0 (阶段2已完成)
+**最后更新**: 2026-06-09  
+**版本**: v3.1 (阶段3已完成 + MCP Server开发规范完成)
