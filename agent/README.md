@@ -7,9 +7,9 @@
 
 ```bash
 # 1. 设置 IMDS 代理凭证
-export ANTHROPIC_AUTH_TOKEN=sk-de843a0c85b1ffadaf05f935734544fa26b0aab8c6cdbcb979676d14bd07d9ee
+export ANTHROPIC_AUTH_TOKEN=sk-de843a0c85
 export ANTHROPIC_BASE_URL=https://imds.ai/
-export ANTHROPIC_MODEL=claude-sonnet-4-6
+export ANTHROPIC_MODEL=claude
 
 # 2. 激活 conda 环境
 conda activate agent
