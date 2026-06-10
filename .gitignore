@@ -1,0 +1,20 @@
+# 不上传到远程（仅本地保留）
+study/
+plan/
+
+# CodeGraph 索引
+.codegraph/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# 数据库 / 运行时
+*.db-shm
+*.db-wal
+qdrant_storage/
+agent/web/web.log
