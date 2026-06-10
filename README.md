@@ -1,8 +1,8 @@
 # KSAgent - 安全生产场景 AI 智能体
 
 > 基于 LangGraph + Qwen3-VL + MCP 的多模态智能体平台  
-> **当前版本**: v3.1 (阶段3已完成 + 复杂任务编排验证通过)  
-> **最后更新**: 2026-06-09
+> **当前版本**: v3.2 (阶段2.5.1已完成 + 真实平台对接完成)  
+> **最后更新**: 2026-06-10
 
 ---
 
@@ -19,9 +19,12 @@
   - 自建轻量方案（Qdrant + BGE-M3 + reranker）
   - kb_regulation Skill已注册，端到端验证通过
   - 知识库管理Web界面（上传/检索/编辑/参数调优）
-- 🚧 **阶段2.5.1**: 真实平台对接 - 准备中
-  - MCP Server开发规范已完成（2026-06-09）
-  - 等待真实平台Schema与API文档
+- ✅ **阶段2.5.1**: 真实平台对接 - 已完成（2026-06-10）
+  - HTTP 直连真实 MCP Server（192.168.1.199:6620/mcp）
+  - 19 个真实工具动态注册（ai_event_* / video_* / system_*）
+  - 下游 skill 改造完成（aggregate/visualize/vlm_judge/update_alarm_status）
+  - 跨事件循环连接修复（线程本地存储方案）
+  - 3 个端到端 Demo 全部验证通过
 - 📅 **阶段4**: Agent-of-Agent 平台化 - 规划中（2周）
 - 📅 **阶段5**: 生产优化 - 规划中（3周）
 
@@ -46,13 +49,14 @@
 - **可观测**: 计划与执行步骤完整审计
 - **Formatter**: 智能压缩中间结果（自动剥离image_base64等大对象，避免超token上限）
 
-### 3. 数据访问控制（MCP 协议，读写分离）
-**阶段2核心改进**: 数据库访问从硬编码 SQL 改为 MCP 协议控制
-- ✅ 表级白名单（alarms, persons, video_clips, audit_log）
-- ✅ 字段级白名单（隐藏敏感字段如 id_card, phone）
-- ✅ 只读/只写分离：ksipms_server (只读) + ksipms_write_server (受控回写)
-- ✅ 审计日志（读操作best-effort，写操作强制记录，失败则回滚）
-- ✅ MCP Server开发规范（`plan/MCP_SERVER_SPECIFICATION.md`，指导真实平台对接）
+### 3. 真实平台对接（MCP HTTP 直连，已完成）
+**阶段2.5.1核心改进**: 从本地 SQLite 切换到真实 KSIpms 综合管理平台
+- ✅ HTTP 直连真实 MCP Server（`http://192.168.1.199:6620/mcp`）
+- ✅ 19 个真实工具动态注册（ai_event_* 8个 / video_* 6个 / system_* 5个）
+- ✅ 字段映射对齐（alarm_uuid→uuid, alarm_type→event_type, 等）
+- ✅ 跨事件循环连接修复（线程本地存储，避免 ClosedResourceError）
+- ✅ VLM 复判支持 HTTP 图片 URL（拉取真实平台截图）
+- ✅ 告警回写对接真实 API（ai_event_deal，review_status 映射）
 
 ### 4. 知识库联动（阶段3已完成）
 RAG 查询规章制度，结合图像识别结果给出违规条款
@@ -65,7 +69,7 @@ RAG 查询规章制度，结合图像识别结果给出违规条款
 
 ---
 
-## 🏗️ 技术架构（阶段2最新）
+## 🏗️ 技术架构（阶段2.5.1最新）
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -119,8 +123,8 @@ RAG 查询规章制度，结合图像识别结果给出违规条款
 | **Web 框架** | FastAPI 0.115+ | 异步 API、自动 OpenAPI 文档 |
 | **智能体编排** | LangGraph 0.2+ | Plan-Execute 模式、状态图 |
 | **VLM 后端** | Qwen3-VL-4B-FP8 (vLLM) | `http://127.0.0.1:8004/v1` (FP8量化) |
-| **工具协议** | MCP (Model Context Protocol) | 数据访问权限控制（读写分离） |
-| **工具管理** | Skill Registry | 统一注册表，动态发现 |
+| **工具协议** | MCP (Model Context Protocol) | HTTP 直连真实平台（19 个工具） |
+| **工具管理** | Skill Registry | 统一注册表，动态发现，跨事件循环支持 |
 | **知识库** | Qdrant + BGE-M3 + reranker | 自建轻量方案（已完成） |
 | **数据库** | SQLite 3 | 告警、人员、录像、审计数据 |
 | **语音** | Whisper / FunASR | 语音转文字（待接入） |
@@ -202,12 +206,12 @@ Matplotlib生成统计图表，自动压缩base64传递
 - **可视化**：visualize_alarms（柱状图、折线图、饼图）
 - **大对象剥离**：formatter自动剥离image_base64（28KB+），只保留占位符，避免超token上限
 
-### 6. 复杂任务编排（已验证）
+### 6. 复杂任务编排（已验证，真实平台数据）
 多步骤、跨模态、需回写、需可视化的真实业务链路
-- **Demo 1**：统计+可视化（聚合→画图→自然语言回复）
-- **Demo 2**：复判闭环（VLM推理→verdict映射→回写数据库+审计）
-- **Demo 3**：告警+规章联动（VLM识别违规→查知识库→处罚建议）
-- **已验证场景**：从"单步工具调用"升级为"多步骤、跨模态、需回写、需可视化"的真实业务链路
+- **Demo 1**：统计+可视化（真实平台 10476 条告警 → 聚合 → 画图 → 自然语言回复）
+- **Demo 2**：复判闭环（ai_event_detail 获取真实截图 → VLM 推理 → verdict 映射 → 回写 review_status）
+- **Demo 3**：设备查询（video_device_list 返回真实设备列表）
+- **已验证场景**：端到端真实平台数据流转，无模拟数据
 
 ---
 
@@ -578,6 +582,7 @@ result = await registry.invoke(
 - **[STAGE2_SUMMARY.md](STAGE2_SUMMARY.md)** - 阶段2完成总结
 - **[plan/DELIVERY_SUMMARY.md](plan/DELIVERY_SUMMARY.md)** - 复杂任务编排验证交付总结
 - **[plan/RAG_COMPLETION_SUMMARY.md](plan/RAG_COMPLETION_SUMMARY.md)** - RAG 知识库集成完成总结
+- **[plan/STAGE_2_5_1_COMPLETION_SUMMARY.md](plan/STAGE_2_5_1_COMPLETION_SUMMARY.md)** - 真实平台对接完成总结（2026-06-10）
 
 ### 平台对接
 - **[plan/MCP_SERVER_SPECIFICATION.md](plan/MCP_SERVER_SPECIFICATION.md)** - MCP Server 开发规范与对接指南（13,000字，含完整示例）
@@ -674,5 +679,5 @@ print([s.id for s in skills])
 ---
 
 **项目维护**: KSAgent 开发团队  
-**最后更新**: 2026-06-09  
-**版本**: v3.1 (阶段3已完成 + MCP Server开发规范完成)
+**最后更新**: 2026-06-10  
+**版本**: v3.2 (阶段2.5.1已完成 + 真实平台对接完成)

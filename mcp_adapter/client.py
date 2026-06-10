@@ -1,14 +1,6 @@
-"""
-MCP 客户端 - 支持 stdio 与 streamable HTTP 两种传输
-
-阶段 2.5.1 改造点：
-- 新增 HTTP 传输（streamablehttp_client），对接真实平台 192.168.1.199:6620/mcp
-- 用 AsyncExitStack 统一管理 stdio/http 上下文 + ClientSession 的生命周期
-  （旧实现没把 ClientSession 作为 async context manager 进入，后台接收循环未启动，
-   会导致 initialize 卡住或工具调用永久挂起，这次一并修复）
-- 鉴权透明化：MCP Server 内部已处理后端鉴权，Python 侧不需要传 AK/SK
-"""
+import asyncio
 import json
+import threading
 from contextlib import AsyncExitStack
 from typing import Any, Dict, Optional
 
@@ -201,46 +193,58 @@ class MCPClient:
             await self.disconnect_server(server_name)
 
 
-# 全局单例
-_mcp_client: Optional[MCPClient] = None
+# 线程本地存储，每个线程/事件循环独立维护一个 MCP Client
+_thread_local = threading.local()
 
 
 async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
-    """获取 MCP Client 单例（按 config.mcp.transport 选择 stdio / http）
+    """获取 MCP Client（线程本地单例，按 config.mcp.transport 选择 stdio / http）
 
     Args:
         force_reconnect: 强制重连（用于连接失效后的恢复）
-    """
-    global _mcp_client
 
-    # 如果已存在且不需要重连，检查连接是否有效
-    if _mcp_client is not None and not force_reconnect:
+    注意：每个线程/事件循环独立维护一个 MCP Client
+        在不同线程调用时会自动创建新的连接，避免跨事件循环问题
+    """
+    # 从线程本地存储获取
+    if not hasattr(_thread_local, 'client'):
+        _thread_local.client = None
+
+    client = _thread_local.client
+
+    # 检查是否需要重连
+    need_reconnect = force_reconnect
+    if client is not None and not force_reconnect:
         # 检查 ksipms 服务是否已连接
-        if "ksipms" in _mcp_client.servers:
-            return _mcp_client
-        else:
+        if "ksipms" not in client.servers:
             logger.warning("MCP Client 存在但 ksipms 连接丢失，尝试重连...")
-            force_reconnect = True
+            need_reconnect = True
+
+    # 如果不需要重连且已存在，直接返回
+    if client is not None and not need_reconnect:
+        return client
 
     # 需要重连时先关闭旧连接
-    if force_reconnect and _mcp_client is not None:
+    if client is not None:
         try:
-            await _mcp_client.close()
+            await client.close()
         except Exception as e:
             logger.warning(f"关闭旧连接失败: {e}")
-        _mcp_client = None
+        _thread_local.client = None
 
-    _mcp_client = MCPClient()
-    if not _mcp_client.enabled:
-        return _mcp_client
+    # 创建新连接
+    client = MCPClient()
+    if not client.enabled:
+        _thread_local.client = client
+        return client
 
-    transport = (_mcp_client.config.get("transport") or "stdio").lower()
+    transport = (client.config.get("transport") or "stdio").lower()
 
     if transport == "http":
-        endpoint = _mcp_client.config.get("endpoint", "http://127.0.0.1:6620/mcp")
-        timeout = float(_mcp_client.config.get("timeout", 30))
+        endpoint = client.config.get("endpoint", "http://127.0.0.1:6620/mcp")
+        timeout = float(client.config.get("timeout", 30))
         # 同事确认：MCP 调用层无需鉴权，鉴权在 MCP Server 内部完成
-        await _mcp_client.connect_http_server(
+        await client.connect_http_server(
             server_name="ksipms",
             url=endpoint,
             headers=None,
@@ -248,19 +252,20 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
         )
     else:
         # stdio 兼容路径（保留向后兼容，主流程已切到 http）
-        await _mcp_client.connect_stdio_server(
+        await client.connect_stdio_server(
             server_name="ksipms",
             command="python",
             args=["-m", "mcp_servers.ksipms_server"],
             env={},
         )
 
-    return _mcp_client
+    # 保存到线程本地存储
+    _thread_local.client = client
+    return client
 
 
 async def reset_mcp_client() -> None:
-    """重置全局单例（仅测试用）"""
-    global _mcp_client
-    if _mcp_client is not None:
-        await _mcp_client.close()
-        _mcp_client = None
+    """重置线程本地 MCP Client（仅测试用）"""
+    if hasattr(_thread_local, 'client') and _thread_local.client is not None:
+        await _thread_local.client.close()
+        _thread_local.client = None

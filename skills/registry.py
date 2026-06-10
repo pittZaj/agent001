@@ -70,23 +70,26 @@ class SkillRegistry:
         try:
             if skill.skill_type == SkillType.MCP_TOOL:
                 # 通过 MCP Client 调用
-                if not self._mcp_client:
+                # 每次都重新获取 client，确保在当前线程/事件循环中可用
+                from mcp_adapter.client import get_mcp_client
+                mcp_client = await get_mcp_client()
+
+                if not mcp_client or not mcp_client.enabled:
                     return {"error": "MCP client not initialized"}
 
-                # 检查连接是否有效，如果无效则尝试重连
-                if skill.mcp_server not in self._mcp_client.servers:
+                # 检查连接是否有效
+                if skill.mcp_server not in mcp_client.servers:
                     logger.warning(f"MCP server {skill.mcp_server} 未连接，尝试重连...")
                     try:
-                        from mcp_adapter.client import get_mcp_client
-                        self._mcp_client = await get_mcp_client(force_reconnect=True)
-                        if skill.mcp_server not in self._mcp_client.servers:
+                        mcp_client = await get_mcp_client(force_reconnect=True)
+                        if skill.mcp_server not in mcp_client.servers:
                             return {"error": f"MCP server {skill.mcp_server} 重连失败"}
                         logger.info(f"MCP server {skill.mcp_server} 重连成功")
                     except Exception as e:
                         logger.error(f"重连 MCP server 失败: {e}")
                         return {"error": f"MCP server reconnect failed: {e}"}
 
-                result = await self._mcp_client.call_tool(
+                result = await mcp_client.call_tool(
                     server_name=skill.mcp_server,
                     tool_name=skill_id,
                     args=args
