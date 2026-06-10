@@ -11,6 +11,47 @@ from utils import CONFIG
 from skills import get_skill_registry
 
 
+def _format_skills_grouped(skills) -> str:
+    """按真实平台分类组织工具描述（ai_*/video_*/system_* / 本地分析 / 子图）"""
+    groups: dict[str, list] = {
+        "AI 视觉告警 (ai_*)": [],
+        "视频设备与录像 (video_*)": [],
+        "系统管理 (system_*)": [],
+        "数据分析 (本地)": [],
+        "复杂子图": [],
+        "基础": [],
+    }
+    for s in skills:
+        if s.id.startswith("ai_"):
+            groups["AI 视觉告警 (ai_*)"].append(s)
+        elif s.id.startswith("video_"):
+            groups["视频设备与录像 (video_*)"].append(s)
+        elif s.id.startswith("system_"):
+            groups["系统管理 (system_*)"].append(s)
+        elif s.skill_type.value == "subgraph":
+            groups["复杂子图"].append(s)
+        elif s.id == "direct_response":
+            groups["基础"].append(s)
+        else:
+            groups["数据分析 (本地)"].append(s)
+
+    lines: list[str] = []
+    for title, items in groups.items():
+        if not items:
+            continue
+        lines.append(f"\n## {title}")
+        for s in items:
+            params = s.parameters.get("properties", {}) if isinstance(s.parameters, dict) else {}
+            param_desc = ", ".join([
+                f"{k}: {v.get('description', v.get('type', 'any'))}"
+                for k, v in list(params.items())[:6]  # 截断长 schema
+            ])
+            lines.append(f"- `{s.id}` — {s.description}")
+            if param_desc:
+                lines.append(f"   参数: {{{param_desc}}}")
+    return "\n".join(lines)
+
+
 def planner_node(state: AgentState) -> Dict[str, Any]:
     """
     规划节点：LLM 解析用户意图，生成任务列表
@@ -20,20 +61,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     """
     logger.info(f"[Planner] 开始规划任务，用户消息: {state['user_message']}")
 
-    # 从 Skill Registry 获取可用工具
+    # 从 Skill Registry 获取可用工具，按平台分类组织
     registry = get_skill_registry()
     available_skills = registry.list_skills()
-
-    # 构造工具描述
-    tools_desc = []
-    for idx, skill in enumerate(available_skills, 1):
-        param_desc = ", ".join([
-            f"{k}: {v.get('description', v.get('type', 'any'))}"
-            for k, v in skill.parameters.get("properties", {}).items()
-        ])
-        tools_desc.append(f"{idx}. {skill.id} - {skill.description}\n   参数: {{{param_desc}}}")
-
-    tools_text = "\n".join(tools_desc) if tools_desc else "暂无可用工具"
+    tools_text = _format_skills_grouped(available_skills) or "暂无可用工具"
 
     llm_config = CONFIG["llm"]
     llm = ChatOpenAI(
@@ -43,24 +74,53 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         temperature=0.1,  # 规划阶段用低温度
     )
 
-    system_prompt = f"""你是一个任务规划助手。根据用户的请求，将其拆解为可执行的子任务。
+    system_prompt = f"""你是 KSIpms 综合管理平台的智能任务规划助手。请根据用户请求，将其拆解为可执行的子任务序列。
 
-可用工具：
+# 可用工具（已对接真实平台 192.168.1.199:6620 MCP Server）
 {tools_text}
 
-请按以下 JSON 格式返回任务列表：
+# 工具选择指引（重要）
+- 查 AI 视觉算法告警（越界/离岗/未戴安全帽/吸烟等）→ 用 `ai_event_*`，**不是** `system_alarm_*`
+- 查服务器/磁盘/服务基础设施告警 → 用 `system_alarm_*`
+- AI 告警的复判/回写：先 `vlm_judge_alarm`（输入 alarm_uuid），再 `update_alarm_status`（verdict 自动映射 review_status）
+- 统计/趋势分析 → 用 `aggregate_alarms`（消费 ai_event_list）+ `visualize_alarms`（生成图表）
+- 查规章制度/处罚标准 → 用 `kb_regulation`
+- 查录像片段：用 `fetch_alarm_context`（输入 alarm_uuid，自动解析摄像头与时间窗）
+- 查 AI 摄像机/视频设备列表 → 用 `video_device_list`，**不要**用 system_role_camera_permission（那是按角色查权限）
+- 仅闲聊或无法用工具完成 → 用 `direct_response`
+
+# 真实平台关键字段（与旧版有差异，务必对齐）
+- AI 事件主键：`uuid`（不是 alarm_uuid）→ ai_event_* 工具入参用 `event_uuid`
+- 时间字段：`created_at`，格式 "yyyy-MM-dd HH:mm:ss"；筛选用 `time_start`/`time_end`
+- 告警类型：`event_type`（如 ET03007）/ `event_name`（中文，如"未戴安全帽告警"）
+- 摄像机：`camera_uuid` / `camera_name`
+- 复核状态 review_status：1=待复核 2=已复核 3=已完成 5=误报
+
+# 步骤间传参
+- 引用前序步骤输出：`{{{{step_N.field_name}}}}`，支持嵌套如 `{{{{step_0.events.0.uuid}}}}`
+- 纯引用（整个值就是一个 {{{{...}}}}）会保留原始类型（list/dict 不会被字符串化）
+
+# 输出格式
+仅返回 JSON 数组，不要包裹任何其他文字：
 [
-  {{"task": "query_alarms", "args": {{"date": "2026-06-01"}}}},
-  {{"task": "format_response", "args": {{"template": "今天共发生 {{{{count}}}} 类告警"}}}}
+  {{"task": "ai_event_list", "args": {{"pageno": 1, "pagesize": 5}}}},
+  {{"task": "vlm_judge_alarm", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}"}}}},
+  {{"task": "update_alarm_status", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}", "verdict": "{{{{step_1.verdict}}}}", "note": "VLM 自动复判"}}}}
 ]
 
-注意：
-1. 只能使用上述列出的工具，不要编造不存在的工具
-2. 参数必须符合工具定义的 schema
-3. 如果用户请求无法用工具完成，返回：[{{"task": "direct_response", "args": {{"text": "..."}}}}]
-4. **步骤间传参**：如果后续任务需要使用前面任务的输出，使用模板语法 {{{{step_N.field_name}}}}
-   例如：步骤0返回 {{"camera_id": "CAM-005", "ts_event": 1234567890}}
-        步骤1可引用：{{"task": "query_video", "args": {{"camera_id": "{{{{step_0.camera_id}}}}"}}}}
+# 常见任务模板
+- "统计每种告警类型数量并画柱状图"：
+  [{{"task":"aggregate_alarms","args":{{"group_by":"event_name"}}}},
+   {{"task":"visualize_alarms","args":{{"data":"{{{{step_0}}}}","chart_type":"bar","title":"告警类型分布"}}}}]
+- "复判告警 <UUID> 并回写状态"：
+  [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
+   {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
+- "查最近 N 条 AI 告警"：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":N}}}}]
+
+# 约束
+1. 只能使用上述列出的工具，不要编造
+2. 参数名必须严格匹配工具 schema（如 ai_event_* 用 event_uuid，不是 alarm_uuid）
+3. 无法完成时返回 `[{{"task":"direct_response","args":{{"text":"..."}}}}]`
 """
 
     messages = [
@@ -216,24 +276,32 @@ def _resolve_step_references(args: Dict[str, Any], step_outputs: Dict[int, Any],
 
     for key, value in args.items():
         if isinstance(value, str):
-            # 匹配 {{step_0.camera_id}} 格式
+            # 1) 纯引用快捷路径（整个值就是 {{step_N}} 或 {{step_N.path}}）：保留原始类型
+            #    否则 list/dict 会被 str() 成字符串，下游工具无法使用
+            pure_whole = re.fullmatch(r'\{\{step_(\d+)\}\}', value.strip())
+            pure_field = re.fullmatch(r'\{\{step_(\d+)\.([^}]+)\}\}', value.strip())
+            if pure_whole:
+                step_idx = int(pure_whole.group(1))
+                if step_idx < current_idx and step_idx in step_outputs:
+                    logger.info(f"[Executor] 解析参数(整体保留): {{{{step_{step_idx}}}}} -> {type(step_outputs[step_idx]).__name__}")
+                    resolved[key] = step_outputs[step_idx]
+                    continue
+                resolved[key] = value
+                continue
+            if pure_field:
+                step_idx, field_path = int(pure_field.group(1)), pure_field.group(2)
+                if step_idx < current_idx and step_idx in step_outputs:
+                    field_value = _get_nested_field(step_outputs[step_idx], field_path)
+                    if field_value is not None:
+                        logger.info(f"[Executor] 解析参数(保留类型): {{{{step_{step_idx}.{field_path}}}}} -> {type(field_value).__name__}")
+                        resolved[key] = field_value
+                        continue
+                resolved[key] = value
+                continue
+
+            # 2) 字符串拼接路径（如 "今天{{step_0.count}}起"）
             matches = re.findall(r'\{\{step_(\d+)\.([^}]+)\}\}', value)
             if matches:
-                # 纯引用快捷路径：整个值就是一个 {{step_N.field}}，保留原始类型
-                # （否则 list/dict 会被 str() 成字符串，下游工具无法使用）
-                pure_match = re.fullmatch(r'\{\{step_(\d+)\.([^}]+)\}\}', value.strip())
-                if pure_match:
-                    step_idx, field_path = int(pure_match.group(1)), pure_match.group(2)
-                    if step_idx < current_idx and step_idx in step_outputs:
-                        field_value = _get_nested_field(step_outputs[step_idx], field_path)
-                        if field_value is not None:
-                            logger.info(f"[Executor] 解析参数(保留类型): {{{{step_{step_idx}.{field_path}}}}} -> {type(field_value).__name__}")
-                            resolved[key] = field_value
-                            continue
-                    # 解析失败则原样保留
-                    resolved[key] = value
-                    continue
-
                 resolved_value = value
                 for step_idx_str, field_path in matches:
                     step_idx = int(step_idx_str)
@@ -289,43 +357,6 @@ def _get_nested_field(data: Any, field_path: str) -> Any:
             return None
 
     return current
-
-
-def _execute_task_mock(task: Dict[str, Any]) -> Dict[str, Any]:
-    """Mock 工具执行（阶段 1 用，阶段 2 替换为真实 MCP 调用）"""
-    task_name = task["task"]
-    args = task["args"]
-
-    if task_name == "query_alarms":
-        return {
-            "success": True,
-            "tool": "query_alarms",
-            "result": {
-                "alarms": [
-                    {"type": "no_helmet", "count": 5},
-                    {"type": "smoking", "count": 2},
-                    {"type": "phone", "count": 1},
-                ]
-            }
-        }
-    elif task_name == "query_video":
-        return {
-            "success": True,
-            "tool": "query_video",
-            "result": {"video_url": f"http://video.internal/clip/{args.get('camera_id')}_mock.mp4"}
-        }
-    elif task_name == "direct_response":
-        return {
-            "success": True,
-            "tool": "direct_response",
-            "result": {"text": args.get("text", "")}
-        }
-    else:
-        return {
-            "success": False,
-            "tool": task_name,
-            "error": f"未知任务类型: {task_name}"
-        }
 
 
 def _strip_large_fields(data, _max_str=800):
@@ -390,14 +421,23 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
         temperature=0.3,
     )
 
-    system_prompt = """你是一个友好的助手。根据用户的问题和工具调用结果，用自然语言生成简洁清晰的回答。
+    system_prompt = """你是 KSIpms 综合管理平台的智能助手。根据用户问题和工具调用结果，用自然语言生成简洁清晰的回答。
 
-要求：
-1. 直接回答用户的问题，不要重复问题
-2. 用中文回答，结构清晰
-3. 如果有数据，用列表或表格的形式呈现
-4. 不要编造数据，只基于工具返回的真实结果
-5. 如果工具失败，说明失败原因
+# 真实平台关键字段速查（解读工具结果时使用）
+- AI 事件: `events[]`，每项含 uuid / event_type / event_name / camera_name / created_at / img_path / level / review_status
+  · review_status: 1=待复核 2=已复核 3=已完成 5=误报
+  · level: red/orange/yellow/blue
+- 视频设备: `devices[]`，每项含 uuid / device_name / device_ip / status
+- 聚合统计: `data: [{key, count}]` + `total` + `platform_total`（若 sampled=True 提示是基于采样）
+- VLM 复判: `verdict` (confirmed/rejected/uncertain) + `confidence` + `reasoning`
+- 图表生成: `image_base64` 字段（已被剥离为占位符摘要，告诉用户"已生成图表"即可）
+
+# 输出要求
+1. 直接回答问题，不要重复用户问句
+2. 中文回答，结构清晰；多条数据用列表/表格
+3. 不编造，只基于工具返回的真实结果
+4. 工具失败时，明确说明失败原因
+5. 涉及数字（数量/置信度等）保留原值，不要四舍五入到整数
 """
 
     user_prompt = f"""用户问题：{user_message}

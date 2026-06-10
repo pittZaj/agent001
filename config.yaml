@@ -9,28 +9,16 @@ llm:
   max_tokens: 2048
   timeout: 60
 
-# MCP 配置（ksipms 平台业务接口）
+# MCP 配置（ksipms 综合管理平台 - 真实 MCP Server）
+# 阶段 2.5.1：HTTP 直连同事部署的 ksipms-mcp（19 个工具：ai_* / video_* / system_*）
+# 鉴权：MCP Server 内部已处理后端鉴权，Python 侧无需传 AK/SK
 mcp:
-  enabled: true  # 阶段 2：启用 MCP
-  endpoint: "http://ksipms.internal:9000/mcp"
+  enabled: true
+  transport: http              # http | stdio（http 直连远程 MCP Server）
+  endpoint: "http://192.168.1.199:6620/mcp"
+  # OM 静态资源根（用于 ai_event_*.img_path 等相对路径转绝对 URL）
+  om_base_url: "http://192.168.1.199:6611"
   timeout: 30
-  tools:
-    - name: "query_alarms"
-      description: "查询告警记录，支持按日期、类型、摄像机筛选"
-      parameters:
-        date: "日期 YYYY-MM-DD"
-        alarm_type: "告警类型（可选）：smoking/no_helmet/phone/no_mask"
-        camera_id: "摄像机 ID（可选）"
-    - name: "query_video"
-      description: "检索录像片段"
-      parameters:
-        camera_id: "摄像机 ID"
-        start_time: "开始时间 YYYY-MM-DD HH:MM:SS"
-        end_time: "结束时间 YYYY-MM-DD HH:MM:SS"
-    - name: "query_person"
-      description: "查询人员信息"
-      parameters:
-        person_id: "人员 ID 或姓名"
 
 # RAG 知识库（可选，阶段 3 接入）
 rag:

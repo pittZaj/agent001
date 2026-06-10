@@ -424,7 +424,9 @@ def build_ui():
         gr.Markdown("# Agent-of-Agent 控制台")
         gr.Markdown(
             "**核心流程**：填写智能体描述 → 后台跑流水线（自动轮询日志） → 一键发布到 FastAPI → 在 Tab 6 直接对话测试。"
-            "默认基座 `Qwen3-VL-4B-Instruct-FP8` (vLLM 8004)，元智能体走 Claude (IMDS)。"
+            "默认基座 `Qwen3-VL-4B-Instruct-FP8` (vLLM 8004)，元智能体走 Claude (IMDS)。\n\n"
+            "**已对接真实平台**：MCP Server `192.168.1.199:6620/mcp`（19 个工具：ai_event_* / video_* / system_*），"
+            "鉴权由 MCP 服务进程内部处理，本端无需密钥。"
         )
 
         with gr.Tabs():
@@ -443,14 +445,14 @@ def build_ui():
                         owner = gr.Textbox(label="owner", value="")
                         business_goal = gr.Textbox(
                             label="业务目标 (一句话, ≤50字)",
-                            value="查询安全生产平台的告警记录，按日期/类型/摄像头筛选并给出聚合统计。",
+                            value="查询并复判 KSIpms 真实平台的 AI 视觉告警，统计/可视化告警分布并回写复核状态。",
                             lines=2,
                         )
                         scenarios_text = gr.Textbox(
                             label="用户场景（每行一条, 至少 3 条）", lines=4,
-                            value=("场景1: 用户问'今天的告警', Agent 调用 query_alarms\n"
-                                   "场景2: 用户提到具体日期+类型, Agent 提取 date 与 alarm_type\n"
-                                   "场景3: 用户用别名(抽烟->smoking), Agent 完成中英映射"),
+                            value=("场景1: 用户问'最近的 AI 告警', Agent 调用 ai_event_list 获取真实平台数据\n"
+                                   "场景2: 用户要求统计告警类型并画柱状图, Agent 串联 aggregate_alarms + visualize_alarms\n"
+                                   "场景3: 用户请求复判某告警, Agent 走 ai_event_detail → vlm_judge_alarm → update_alarm_status 链路"),
                         )
                         tools_text = gr.Textbox(
                             label="工具表格行（每行一条, 直接复制左侧规则的占位）",
@@ -568,8 +570,9 @@ def build_ui():
             # ----- Tab 5 -----
             with gr.Tab("5. 数据库浏览 / CRUD"):
                 gr.Markdown(
-                    "直接操作 `data/ksipms_dev.db`。`audit_log` 表只读（仅 Agent 可写）。"
-                    "改坏了点 *🔄 重置数据库* 重跑 seed.py 即可（约 1 秒）。"
+                    "直接操作 `data/ksipms_dev.db`（**本地 mock 库，仅用于 agent 平台开发期回放**）。"
+                    "已对接真实 MCP Server 后，主智能体的告警数据来自 `192.168.1.199:6620`，本 Tab 仅作历史调试入口；"
+                    "`audit_log` 表只读。改坏了点 *🔄 重置数据库* 重跑 seed.py 即可。"
                 )
                 with gr.Row():
                     table_dd = gr.Dropdown(choices=db_tables, label="选择表",
@@ -581,7 +584,8 @@ def build_ui():
                 with gr.Row():
                     where = gr.Textbox(
                         label="where（可选）",
-                        placeholder="例 alarm_type=smoking and severity>=4   |   "
+                        placeholder="例 event_type=no_helmet and review_status=1   |   "
+                                    "真实平台字段: uuid, event_type, event_name, camera_name, created_at, review_status, level   |   "
                                     "支持 = != >= <= > < LIKE IN, 用 and 连接",
                     )
                     limit = gr.Number(value=50, label="limit", precision=0)
@@ -600,22 +604,22 @@ def build_ui():
                         gr.Markdown("**新增**")
                         ins_kv = gr.Textbox(
                             label="所有字段 key=value（每行一条）", lines=6,
-                            placeholder="alarm_uuid=xxx-yyy-zzz\nalarm_type=smoking\n...",
+                            placeholder="uuid=xxx-yyy-zzz\nevent_type=smoking\nevent_name=违规抽烟\ncamera_name=A区监控1\ncreated_at=2026-06-10 10:30:00\nreview_status=1\nlevel=red",
                         )
                         ins_btn = gr.Button("插入", variant="primary")
                         ins_result = gr.Markdown()
                     with gr.Column():
                         gr.Markdown("**修改**")
                         upd_key = gr.Textbox(label="主键 key=value", lines=2,
-                                             placeholder="alarm_uuid=xxx-yyy-zzz")
+                                             placeholder="uuid=xxx-yyy-zzz")
                         upd_val = gr.Textbox(label="待改字段 key=value", lines=4,
-                                             placeholder="status=closed\nprocessed_note=已处置")
+                                             placeholder="review_status=2\nremark=VLM 复判确认")
                         upd_btn = gr.Button("更新", variant="primary")
                         upd_result = gr.Markdown()
                     with gr.Column():
                         gr.Markdown("**删除**")
                         del_key = gr.Textbox(label="主键 key=value", lines=2,
-                                             placeholder="alarm_uuid=xxx-yyy-zzz")
+                                             placeholder="uuid=xxx-yyy-zzz")
                         del_btn = gr.Button("删除", variant="stop")
                         del_result = gr.Markdown()
 
@@ -668,8 +672,8 @@ def build_ui():
                 )
                 with gr.Row():
                     msg_box = gr.Textbox(
-                        label="给 Agent 发消息",
-                        placeholder="例：查询2026-06-01的抽烟告警",
+                        label="给 Agent 发消息（调用真实平台 MCP 工具）",
+                        placeholder="例：查询最近 5 条 AI 告警 | 统计最近 7 天每种告警类型的数量并画柱状图 | 查询视频设备列表",
                         scale=4,
                     )
                     send_btn = gr.Button("发送", variant="primary", scale=1)
