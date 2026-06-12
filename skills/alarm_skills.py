@@ -78,22 +78,47 @@ async def aggregate_alarms_impl(args: dict, context: dict) -> dict:
     if group_by not in ("event_type", "event_name", "date", "camera", "level"):
         return {"error": f"group_by 必须是 event_type/event_name/date/camera/level，收到: {group_by}"}
 
-    mcp_args: dict[str, Any] = {"pageno": 1, "pagesize": 10000}
+    base_args: dict[str, Any] = {}
     if t := _normalize_time(args.get("date_start") or args.get("time_start"), False):
-        mcp_args["time_start"] = t
+        base_args["time_start"] = t
     if t := _normalize_time(args.get("date_end") or args.get("time_end"), True):
-        mcp_args["time_end"] = t
+        base_args["time_end"] = t
     if et := args.get("alarm_type") or args.get("event_type"):
-        mcp_args["event_type"] = et
+        base_args["event_type"] = et
     if lv := args.get("level"):
-        mcp_args["level"] = lv
+        base_args["level"] = lv
 
-    result = await registry.invoke("ai_event_list", mcp_args, context)
-    if result.get("error"):
-        return {"error": result["error"]}
+    # 自动分页拉取全量数据（在同一事件循环内完成所有分页，避免统计采样不全）
+    # 之前单页 pagesize=10000，当 total > 10000 时只统计了首页，导致"10529 条只统计 10000 条"
+    PAGE_SIZE = 10000
+    MAX_PAGES = 100  # 上限保护：100 * 10000 = 100 万条
+    events: list[dict] = []
+    total = 0
+    pageno = 1
+    while pageno <= MAX_PAGES:
+        page_args = dict(base_args)
+        page_args["pageno"] = pageno
+        page_args["pagesize"] = PAGE_SIZE
+        result = await registry.invoke("ai_event_list", page_args, context)
+        if result.get("error"):
+            # 首页就失败则直接返回错误；后续页失败则保留已拉取数据
+            if pageno == 1:
+                return {"error": result["error"]}
+            logger.warning(f"[aggregate_alarms] 第 {pageno} 页拉取失败，停止分页，已拉取 {len(events)} 条")
+            break
 
-    events: list[dict] = result.get("events", []) or []
-    total = result.get("total", len(events))
+        page_events = result.get("events", []) or []
+        total = result.get("total", len(page_events))
+        events.extend(page_events)
+
+        if len(events) >= total or len(page_events) < PAGE_SIZE:
+            break
+        pageno += 1
+
+    if len(events) < total:
+        logger.warning(f"[aggregate_alarms] 分页拉取 {len(events)}/{total} 条（未拉满，可能触发 MAX_PAGES 上限）")
+    else:
+        logger.info(f"[aggregate_alarms] 分页拉取完成，共 {len(events)}/{total} 条")
 
     counts: dict[str, int] = {}
     for e in events:
