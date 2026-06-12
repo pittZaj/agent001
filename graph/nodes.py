@@ -52,6 +52,19 @@ def _format_skills_grouped(skills) -> str:
     return "\n".join(lines)
 
 
+# ===================== 平台支持的告警类型（权威静态字典） =====================
+# 关键修复（区分"支持"与"有数据"两件事）：
+#   - 旧做法从 ai_event_list 数据反推类型，只能发现"有记录"的类型（当前只有 2 种），
+#     会把"平台支持但暂无数据"的类型（如未戴口罩 ET03004）误判成"平台不存在该告警"。
+#   - 新做法以平台后端算法宏定义（KSAI_* #define）为权威字典 → 准确回答"平台是否支持识别"，
+#     "是否有数据"则交给实际查询 ai_event_list 的 total 判断（formatter 空结果守卫处理）。
+from skills.event_types import (
+    SUPPORTED_EVENT_TYPES, is_supported,
+    catalog_lines as _supported_catalog_lines,
+    catalog_inline as _supported_catalog_inline,
+)
+
+
 def planner_node(state: AgentState) -> Dict[str, Any]:
     """
     规划节点：LLM 解析用户意图，生成任务列表
@@ -65,6 +78,26 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     registry = get_skill_registry()
     available_skills = registry.list_skills()
     tools_text = _format_skills_grouped(available_skills) or "暂无可用工具"
+
+    # 注入"平台支持哪些 AI 告警类型"（权威静态字典，杜绝 LLM 凭空猜 event_type 编码）。
+    # 注意：这里是"平台支持识别的类型"，不代表数据库当前一定有该类告警记录——
+    # "有没有数据"由实际查询 ai_event_list 的结果决定（见 formatter 空结果守卫）。
+    catalog_text = _supported_catalog_lines()
+    catalog_names = _supported_catalog_inline()
+    catalog_block = f"""# 🎯 平台支持的 AI 告警类型（唯一权威清单，来自平台算法定义）
+**只有以下类型平台才能识别，event_type 编码必须从这里取，严禁编造或臆测其它编码：**
+{catalog_text}
+
+**类型匹配与防幻觉规则（极其重要，必须严格遵守）**：
+1. 先把用户说的告警名**语义匹配**到上表（例：吸烟/抽烟→违规抽烟 ET03002；安全帽→未戴安全帽 ET03007；
+   打电话/接电话→接打电话 ET03001；玩手机→使用手机 ET03009；打瞌睡/睡岗→打瞌睡检测 ET02007）。
+2. **能匹配到上表** → 用 `ai_event_list` 并带上对应的 `event_type`。
+   ⚠️ 此时即使该类型暂时没有数据，也**必须真的去查**，由系统根据真实返回结果如实告知
+   （"暂无此类告警记录" vs "查到 N 条"），**绝不能**自己提前断定"没有"或编造数量。
+3. **无法匹配到上表**（例如"跳舞""唱歌"等平台根本没有的算法）→ 平台不支持识别该类型，
+   **绝对不要猜一个编码去查**，直接返回：
+   `[{{"task":"direct_response","args":{{"text":"平台不支持识别「<用户所问类型>」这类告警。当前平台支持的告警类型有：{catalog_names}。"}}}}]`
+4. 区分两种"没有"：①平台不支持识别（走规则3，direct_response）；②平台支持但当前无数据（走规则2，照常查询，由系统据实回复）。绝不能把②当成①。"""
 
     llm_config = CONFIG["llm"]
     llm = ChatOpenAI(
@@ -98,8 +131,11 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 - "今天" → time_start="{_today} 00:00:00", time_end="{_today} 23:59:59"
 - "昨天" → time_start="{_yesterday} 00:00:00", time_end="{_yesterday} 23:59:59"
 - "最近N小时/天/周/月" → time_start=对应起点, time_end="{_now_str}"
-- "所有/全部"（无时间限定）→ **不要传 time_start/time_end**，让平台返回全量数据
+- ⚠️ **用户没有明确说时间范围时（如"查询未戴安全帽的告警""查询吸烟告警"），绝对不要自己加 time_start/time_end！**
+  默认查全量历史数据。只有用户**显式提到**今天/昨天/最近/某日期时才加时间筛选。
 - 年份必须是 {_now.year} 年，绝不能用 2024/2025 等过去年份
+
+{catalog_block}
 
 # 可用工具（已对接真实平台 192.168.1.199:6620 MCP Server）
 {tools_text}
@@ -117,7 +153,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 # 真实平台关键字段（与旧版有差异，务必对齐）
 - AI 事件主键：`uuid`（不是 alarm_uuid）→ ai_event_* 工具入参用 `event_uuid`
 - 时间字段：`created_at`，格式 "yyyy-MM-dd HH:mm:ss"；筛选用 `time_start`/`time_end`
-- 告警类型：`event_type`（如 ET03007）/ `event_name`（中文，如"未戴安全帽告警"）
+- 告警类型：`event_type`（算法编码，**必须取自上方"平台支持的 AI 告警类型"权威清单**）/ `event_name`（中文，如"未戴安全帽告警"）
 - 摄像机：`camera_uuid` / `camera_name`
 - 复核状态 review_status：1=待复核 2=已复核 3=已完成 5=误报
 
@@ -141,6 +177,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
   [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
    {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
 - "查最近/前 N 条 AI 告警"（强调数量）：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":N}}}}]
+- "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间限定）：[{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]（不传时间、不传 pagesize，系统自动拉全量并统计）
 - "查今天/昨天/前天/某日期的 AI 告警"（按时间）：[{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]（不传 pagesize，系统会自动分页拉全量并生成统计摘要）
 
 # 约束
@@ -930,6 +967,51 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
             and tool_results[0].get("success")
             and tool_results[0].get("tool") == "direct_response"):
         return {"final_response": tool_results[0]["result"].get("text", "")}
+
+    # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
+    # 绝不能让下游 LLM 凭空编造无关告警（修复"打电话/跳舞也返回数据"的幻觉问题）。
+    _ev_results = [
+        r for r in tool_results
+        if r.get("success") and r.get("tool") == "ai_event_list"
+        and isinstance(r.get("result"), dict)
+    ]
+    if _ev_results and all(
+        (r["result"].get("total", 0) == 0 and not r["result"].get("events"))
+        for r in _ev_results
+    ):
+        # 复述本次实际使用的筛选条件，让用户确认确实查了对的东西
+        filt = {}
+        for r in _ev_results:
+            for k in ("event_type", "time_start", "time_end", "level", "review_status"):
+                if (v := state.get("plan", [{}])[0].get("args", {}).get(k)) is not None:
+                    filt[k] = v
+
+        # 关键区分：能走到 ai_event_list（而非 direct_response）说明 Planner 已确认
+        # 该类型是"平台支持的算法类型"。因此 total==0 表示"平台支持但当前暂无此类
+        # 告警记录"，而不是"平台不支持该类型"——绝不能把两者混为一谈。
+        from skills.event_types import display_name as _et_name
+        et = filt.get("event_type")
+        has_time = bool(filt.get("time_start") or filt.get("time_end"))
+
+        if et:
+            type_label = _et_name(et, et)
+            if has_time:
+                cond_desc = "在所选时间范围内"
+                detail = "该类型告警在所选时间范围内暂无记录，可尝试去掉时间限制查询全部历史。"
+            else:
+                cond_desc = "（已查全部历史，无时间限制）"
+                detail = ("平台**支持**「" + type_label + "」这类算法识别，"
+                          "但数据库中当前**暂无**该类型的告警记录。")
+            logger.info(f"[Formatter] ai_event_list 空结果：支持但无数据 event_type={et} time={has_time}")
+            return {"final_response":
+                    f"未查询到「{type_label}」（{et}）的告警记录{cond_desc}，共 **0 条**。\n\n"
+                    f"{detail}"}
+
+        cond = "（无筛选条件，已查全量）" if not filt else "（筛选条件：" + ", ".join(f"{k}={v}" for k, v in filt.items()) + "）"
+        logger.info(f"[Formatter] ai_event_list 返回空结果，输出无数据提示 {cond}")
+        return {"final_response":
+                f"未在平台中查询到符合条件的 AI 告警{cond}，共 **0 条**。\n\n"
+                f"该筛选条件下平台暂无告警记录，请确认筛选条件是否符合预期。"}
 
     # 构造工具结果摘要
     summary_parts = []

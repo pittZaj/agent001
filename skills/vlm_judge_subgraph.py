@@ -61,16 +61,11 @@ def _fetch_image_bytes(url_or_path: str, timeout: float = 15.0) -> bytes:
     return p.read_bytes()
 
 
-# 真实平台 event_type 编码 → 中文显示名（最常见的 8 类，未命中时退化用 event_name 字段）
+# 真实平台 event_type 编码 → 中文显示名（仅作离线兜底；准确名称以平台返回的 event_name 字段为准）
+# 注意：ET03002 在真实平台是"违规抽烟"，ET03007 是"未戴安全帽告警"（已和线上数据核对）。
 _EVENT_TYPE_DISPLAY = {
     "ET03007": "未戴安全帽",
-    "ET03001": "吸烟",
-    "ET03002": "明火/烟雾",
-    "ET03003": "未戴口罩",
-    "ET03004": "接打电话",
-    "ET03005": "区域入侵",
-    "ET03006": "离岗",
-    "ET03008": "睡岗",
+    "ET03002": "违规抽烟",
 }
 
 
