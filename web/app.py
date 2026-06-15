@@ -17,6 +17,8 @@ Agent-of-Agent 生成式流水线（原 Tab 1-5）暂缓，后续智能体拓展
 """
 from __future__ import annotations
 
+import base64
+import mimetypes
 import os
 import sys
 from pathlib import Path
@@ -33,18 +35,49 @@ from kb_manager import build_kb_tab  # noqa: E402
 
 
 # ============================================================
-# Tab 1: Agent 对话测试（原控制台 Tab 6）
+# Tab 1: Agent 对话测试（原控制台 Tab 6，已支持图片上传）
 # ============================================================
-def chat_send(history, agent_name, message):
-    """ChatGPT 风格：每条都独立调用 agent.run。"""
+def _file_to_data_url(path: str) -> str | None:
+    """把本地图片文件读成 data URL（data:image/xxx;base64,...）。"""
+    try:
+        mime, _ = mimetypes.guess_type(path)
+        if not mime or not mime.startswith("image"):
+            mime = "image/jpeg"
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
+def chat_send(history, agent_name, mm_input):
+    """ChatGPT 风格：每条都独立调用 agent.run。
+
+    mm_input 为 MultimodalTextbox 的值：{"text": str, "files": [filepath, ...]}。
+    支持三种输入：纯文本 / 文本+图片 / 纯图片。
+    """
     history = history or []
-    if not message or not message.strip():
-        return history, "", ""
-    out = agent_chat.chat_once(agent_name, message)
-    history.append({"role": "user", "content": message})
+    text = (mm_input or {}).get("text", "") or ""
+    files = (mm_input or {}).get("files", []) or []
+
+    # 文本与图片至少有一个
+    if not text.strip() and not files:
+        return history, None, ""
+
+    # 图片文件 → data URL
+    images = [u for u in (_file_to_data_url(f) for f in files) if u]
+
+    # 先把用户消息（图片 + 文字）渲染到对话窗
+    for f in files:
+        history.append({"role": "user", "content": {"path": f}})
+    if text.strip():
+        history.append({"role": "user", "content": text})
+
+    out = agent_chat.chat_once(agent_name, text, images=images)
     history.append({"role": "assistant", "content": out.get("response", "")})
     debug = agent_chat.format_debug_panel(out)
-    return history, "", debug
+    # 清空输入框（MultimodalTextbox 用空字典）
+    return history, None, debug
 
 
 def chat_clear():
@@ -73,7 +106,7 @@ def build_ui():
             "**对话测试 + 知识库管理**，用于日常调试已对接真实平台的主智能体。\n\n"
             "**已对接真实平台**：MCP Server `192.168.1.199:6620/mcp`"
             "（19 个工具：ai_event_* / video_* / system_*），鉴权由 MCP 服务进程内部处理，本端无需密钥。\n\n"
-            "默认基座 `Qwen3-VL-4B-Instruct-FP8` (vLLM 8004)。"
+            "默认基座 `Qwen3-VL-4B-Instruct-FP8` (vLLM 8004)，支持上传图片提问（多模态）。"
         )
 
         with gr.Tabs():
@@ -82,7 +115,9 @@ def build_ui():
                 gr.Markdown(
                     "**ChatGPT 风格调试智能体**。每条消息独立调用 `agent.run`，"
                     "Agent 本身不带会话上下文（多轮对话只是 UI 展示）。"
-                    "默认选「主智能体(增强)」即走真实平台对接的 Plan-Execute 主图。"
+                    "默认选「主智能体(增强)」即走真实平台对接的 Plan-Execute 主图。\n\n"
+                    "**支持三种输入**：纯文本（走平台数据查询）/ 文本+图片 / 纯图片（走 VLM 看图对话）。"
+                    "点输入框内的 📎 上传图片。"
                 )
                 with gr.Row():
                     agent_dd = gr.Dropdown(
@@ -103,9 +138,12 @@ def build_ui():
                     show_copy_button=True,
                 )
                 with gr.Row():
-                    msg_box = gr.Textbox(
-                        label="给 Agent 发消息（调用真实平台 MCP 工具）",
-                        placeholder="例：查询最近 5 条 AI 告警 | 统计告警类型并画饼图 | 统计最近 7 天每天告警数画折线图 | 查询视频设备列表",
+                    msg_box = gr.MultimodalTextbox(
+                        label="给 Agent 发消息（可附图）",
+                        placeholder="例：查询最近 5 条 AI 告警 | 统计告警类型并画饼图 | "
+                                    "（上传现场照片）图里有人没戴安全帽吗？",
+                        file_types=["image"],
+                        file_count="multiple",
                         scale=4,
                     )
                     send_btn = gr.Button("发送", variant="primary", scale=1)

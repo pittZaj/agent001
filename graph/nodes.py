@@ -1167,3 +1167,117 @@ def should_continue(state: AgentState) -> str:
         return "format"
     else:
         return "execute"
+
+
+# ===================== 多模态入口分支（与综合管理平台聊天框对接） =====================
+def route_by_modality(state: AgentState) -> str:
+    """入口路由：根据是否带图，选择走 VLM 直接对话 还是 Plan-Execute 平台数据链路。
+
+    设计语义（v1）：
+        - 用户上传了图片 → 默认意图是"让模型看这张图"（ChatGPT 式体验），走 vlm_chat。
+          MCP 工具针对的是平台数据库的告警，对用户上传的本地图片无意义；强行规划只会
+          产生无关的工具调用与延迟，且 Planner 多模态化复杂度高，故 v1 不做。
+        - 仅文本 → 走 Planner（保持原有真实平台对接全部能力不变）。
+
+    返回值与下游图边的 key 对应：'vlm_chat' | 'planner'
+    """
+    images = state.get("images") or []
+    if images:
+        logger.info(f"[Router] 检测到 {len(images)} 张图，走 VLM 多模态对话")
+        return "vlm_chat"
+    return "planner"
+
+
+def _normalize_image_url(img: str) -> str:
+    """把任意输入归一化为 data URL：
+    - 已经是 'data:image/...;base64,xxx' → 原样返回
+    - 'http(s)://...' → 原样返回（OpenAI 兼容接口直接拉远端图）
+    - 裸 base64 → 默认按 image/jpeg 包装
+    """
+    if not img:
+        return img
+    s = img.strip()
+    if s.startswith("data:image") or s.startswith("http://") or s.startswith("https://"):
+        return s
+    return f"data:image/jpeg;base64,{s}"
+
+
+def vlm_chat_node(state: AgentState) -> Dict[str, Any]:
+    """多模态对话节点：把"图片 + 文本"直接交给 Qwen3-VL，跳过 Planner。
+
+    用于：用户在聊天框上传图片提问（含纯图、图+文 两种）。
+    输入：state['user_message']（可空）+ state['images']（必有至少 1 张）
+    输出：final_response（VLM 回答），同时记一条假的 tool_results 便于前端展示来源。
+    """
+    images = state.get("images") or []
+    user_message = (state.get("user_message") or "").strip()
+
+    if not images:
+        # 路由保险丝：理论上不会进来；万一进来则降级为文本提示
+        return {"final_response": "未检测到图片，请直接发送文字问题。"}
+
+    # 兜底文本：纯图无说明时给一个通用 prompt（聊天框上传图但没打字的场景）
+    if not user_message:
+        user_message = (
+            "请仔细查看这张图片，描述图中的关键信息；"
+            "如果是安全生产现场场景，请重点指出是否存在违规行为（如未戴安全帽、抽烟、玩手机、"
+            "接打电话、未戴口罩等），并给出依据。"
+        )
+
+    logger.info(
+        f"[VLMChat] images={len(images)} text_len={len(user_message)} "
+        f"session={state.get('session_id', '')}"
+    )
+
+    # 构建多模态 message：[image..., text]
+    content: list[dict] = []
+    for img in images:
+        url = _normalize_image_url(img)
+        if not url:
+            continue
+        content.append({"type": "image_url", "image_url": {"url": url}})
+    content.append({"type": "text", "text": user_message})
+
+    system_prompt = (
+        "你是 KSIpms 综合管理平台的智能助手，具备图像理解能力。"
+        "用户在聊天框中上传了图片并发起提问，请基于图像内容给出准确、简洁的中文回答。"
+        "如图像涉及安全生产现场，请关注是否存在违规行为（未戴安全帽/抽烟/玩手机/接打电话/未戴口罩等），"
+        "并明确指出判断依据；不确定时请如实说明，不要编造。"
+    )
+
+    try:
+        llm_config = CONFIG["llm"]
+        llm = ChatOpenAI(
+            base_url=llm_config["base_url"],
+            api_key=llm_config["api_key"],
+            model=llm_config["model"],
+            temperature=0.3,
+            max_tokens=llm_config.get("max_tokens", 2048),
+            timeout=llm_config.get("timeout", 60),
+        )
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=content),
+        ])
+        answer = response.content if hasattr(response, "content") else str(response)
+    except Exception as e:
+        logger.exception(f"[VLMChat] VLM 调用失败")
+        answer = f"图像分析失败: {type(e).__name__}: {e}"
+
+    # 记一条工具结果，便于前端 debug 面板展示走了 VLM 路径
+    tool_result = {
+        "success": True,
+        "tool": "vlm_chat",
+        "result": {
+            "modality": "multimodal",
+            "image_count": len(images),
+            "answer_length": len(answer or ""),
+        },
+    }
+    return {
+        "final_response": answer,
+        "tool_results": [tool_result],
+        "plan": [{"task": "vlm_chat", "args": {"image_count": len(images)},
+                  "status": "completed", "result": tool_result}],
+        "current_task_idx": 1,
+    }

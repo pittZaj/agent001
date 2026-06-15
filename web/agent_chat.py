@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 # 迁移说明（2026-06-15）：本文件从 agent/agent/web/ 迁移到 agent/web/。
 # 路径层级变化：
 #   - LANGGRAPH_ROOT = parents[1] = agent/（含 skills/ graph/ config.yaml utils/）
@@ -54,11 +56,15 @@ def _get_main_graph():
     return _MAIN_GRAPH
 
 
-def _run_main_agent(message: str, trace_id: str = "") -> dict[str, Any]:
-    """调用增强主图，返回与 generated agent 一致的 dict 结构"""
+def _run_main_agent(message: str, trace_id: str = "", images: list[str] | None = None) -> dict[str, Any]:
+    """调用增强主图，返回与 generated agent 一致的 dict 结构。
+
+    images: 图片 base64 data URL 列表（可空）。非空时主图走 VLM 多模态对话分支。
+    """
     graph = _get_main_graph()
     state = {
         "session_id": trace_id or "web", "user_message": message,
+        "images": images or [],
         "plan": [], "current_task_idx": 0, "tool_results": [],
         "step_outputs": {}, "final_response": "", "error": None, "messages": [],
     }
@@ -88,13 +94,19 @@ def _get_run(name: str):
     return run_fn
 
 
-def chat_once(agent_name: str, message: str) -> dict[str, Any]:
-    """单轮调用：返回 {response, plan, tool_results, error, trace_id, elapsed_ms}。"""
+def chat_once(agent_name: str, message: str, images: list[str] | None = None) -> dict[str, Any]:
+    """单轮调用：返回 {response, plan, tool_results, error, trace_id, elapsed_ms}。
+
+    images: 图片 base64 data URL 列表（可空）。仅主智能体支持图片；
+            已发布的生成式 agent 签名固定，传图会被忽略（并给出提示）。
+    """
+    images = images or []
     if not agent_name:
         return {"response": "(未选择 Agent)", "plan": [], "tool_results": [],
                 "error": "no agent selected", "trace_id": "",
                 "elapsed_ms": 0}
-    if not message or not message.strip():
+    # 文本与图片至少有一个
+    if (not message or not message.strip()) and not images:
         return {"response": "(空消息)", "plan": [], "tool_results": [],
                 "error": "empty message", "trace_id": "",
                 "elapsed_ms": 0}
@@ -109,7 +121,13 @@ def chat_once(agent_name: str, message: str) -> dict[str, Any]:
     t0 = time.time()
     trace_id = str(uuid.uuid4())
     try:
-        out = run_fn(message, trace_id=trace_id)
+        if agent_name == MAIN_AGENT_NAME:
+            out = run_fn(message, trace_id=trace_id, images=images)
+        else:
+            # 生成式 agent 不支持多模态：有图时显式提示，仍按文本调用
+            if images:
+                logger.warning(f"[chat] agent={agent_name} 不支持图片，已忽略 {len(images)} 张图")
+            out = run_fn(message, trace_id=trace_id)
     except Exception:
         return {"response": "", "plan": [], "tool_results": [],
                 "error": traceback.format_exc(), "trace_id": trace_id,

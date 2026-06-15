@@ -3,16 +3,32 @@ from typing import Optional, Dict, Any, List
 
 
 class ChatRequest(BaseModel):
-    """文本对话请求"""
+    """对话请求（兼容纯文本 / 文本+图片 / 纯图片 三种形式）
+
+    与综合管理平台聊天框对接：
+      - 纯文本：     {"session_id": "u1", "message": "今天有哪些告警？"}
+      - 文本+图片：  {"session_id": "u1", "message": "图里有人没戴安全帽吗？", "images": ["data:image/jpeg;base64,..."]}
+      - 纯图片：     {"session_id": "u1", "images": ["data:image/jpeg;base64,..."]}
+    """
     session_id: str = Field(..., description="会话 ID")
-    message: str = Field(..., description="用户消息")
-    stream: bool = Field(False, description="是否流式输出")
+    message: Optional[str] = Field(
+        None, description="用户文本消息（纯图片时可不传）"
+    )
+    images: Optional[List[str]] = Field(
+        None,
+        description="图片列表，每项为 base64 data URL（data:image/...;base64,xxx）或裸 base64；"
+                    "也支持 http(s) 图片 URL。可多张。",
+    )
+    stream: bool = Field(False, description="是否流式输出（暂未启用）")
 
 
 class ChatResponse(BaseModel):
-    """文本对话响应"""
+    """对话响应"""
     session_id: str
     response: str
+    modality: str = Field(
+        "text", description="本次走的链路：text=纯文本Plan-Execute / multimodal=VLM看图对话"
+    )
     plan: List[Dict[str, Any]] = []
     tool_calls: List[Dict[str, Any]] = []
     elapsed_ms: int

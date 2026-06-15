@@ -139,23 +139,42 @@ async def health():
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """文本对话（自然语言操作）
+    """对话接口（兼容 纯文本 / 文本+图片 / 纯图片 三种形式，类 ChatGPT 聊天框）
 
     示例：
+        # 纯文本
         POST /api/v1/chat
         {"session_id": "user123", "message": "今天发生了哪几种告警事件？"}
+
+        # 文本 + 图片
+        {"session_id": "user123", "message": "图里有人没戴安全帽吗？",
+         "images": ["data:image/jpeg;base64,..."]}
+
+        # 纯图片（不传 message 也可）
+        {"session_id": "user123", "images": ["data:image/jpeg;base64,..."]}
     """
     t0 = time.time()
-    logger.info(f"[Chat] session={request.session_id} msg={request.message}")
+    message = (request.message or "").strip()
+    images = request.images or []
+
+    # 校验：message / images 至少有一个
+    if not message and not images:
+        raise HTTPException(status_code=400, detail="message 与 images 不能同时为空")
+
+    logger.info(
+        f"[Chat] session={request.session_id} msg_len={len(message)} images={len(images)}"
+    )
 
     try:
         graph = get_graph()
         initial_state = {
             "session_id": request.session_id,
-            "user_message": request.message,
+            "user_message": message,
+            "images": images,
             "plan": [],
             "current_task_idx": 0,
             "tool_results": [],
+            "step_outputs": {},
             "final_response": "",
             "error": None,
             "messages": [],
@@ -168,11 +187,14 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             session_id=request.session_id,
             response=final_state.get("final_response", ""),
+            modality="multimodal" if images else "text",
             plan=final_state.get("plan", []),
             tool_calls=final_state.get("tool_results", []),
             elapsed_ms=elapsed_ms,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"[Chat] 处理失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

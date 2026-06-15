@@ -9,6 +9,11 @@ class AgentState(TypedDict):
     session_id: str
     user_message: str
 
+    # 多模态输入：用户上传的图片（base64 data URL 或裸 base64），按上传顺序排列。
+    # 为空 → 走纯文本 Plan-Execute 链路；非空 → 走 VLM 多模态对话节点。
+    # 与企业聊天框对接（"文本/文本+图/纯图"三种形式）的承载字段。
+    images: List[str]
+
     # Plan-Execute 流程
     plan: List[Dict[str, Any]]  # [{"task": "query_alarms", "args": {...}, "status": "pending"}]
     current_task_idx: int
