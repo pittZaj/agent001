@@ -131,8 +131,9 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 - "今天" → time_start="{_today} 00:00:00", time_end="{_today} 23:59:59"
 - "昨天" → time_start="{_yesterday} 00:00:00", time_end="{_yesterday} 23:59:59"
 - "最近N小时/天/周/月" → time_start=对应起点, time_end="{_now_str}"
+- ⚠️ **"查最近N条"是数量限制（pagesize），不是时间筛选！** 不要加 time_start/time_end。
 - ⚠️ **用户没有明确说时间范围时（如"查询未戴安全帽的告警""查询吸烟告警"），绝对不要自己加 time_start/time_end！**
-  默认查全量历史数据。只有用户**显式提到**今天/昨天/最近/某日期时才加时间筛选。
+  默认查全量历史数据。只有用户**显式提到**今天/昨天/最近N天/某日期时才加时间筛选。
 - 年份必须是 {_now.year} 年，绝不能用 2024/2025 等过去年份
 
 {catalog_block}
@@ -169,16 +170,24 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
   {{"task": "update_alarm_status", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}", "verdict": "{{{{step_1.verdict}}}}", "note": "VLM 自动复判"}}}}
 ]
 
-# 常见任务模板（重要：按时间范围查询不要限制 pagesize，让系统自动拉全量）
-- "统计每种告警类型数量并画柱状图"：
+# 常见任务模板（语义区分：统计全量 vs 查看样本/最近N条）
+- "统计每种告警类型数量并画柱状图"（统计全量，按用户指定图表类型）：
   [{{"task":"aggregate_alarms","args":{{"group_by":"event_name"}}}},
-   {{"task":"visualize_alarms","args":{{"data":"{{{{step_0}}}}","chart_type":"bar","title":"告警类型分布"}}}}]
+   {{"task":"visualize_alarms","args":{{"data":"{{{{step_0}}}}","chart_type":"<用户指定:bar/line/pie>","title":"告警类型分布"}}}}]
 - "复判告警 <UUID> 并回写状态"：
   [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
    {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
-- "查最近/前 N 条 AI 告警"（强调数量）：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":N}}}}]
-- "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间限定）：[{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]（不传时间、不传 pagesize，系统自动拉全量并统计）
-- "查今天/昨天/前天/某日期的 AI 告警"（按时间）：[{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]（不传 pagesize，系统会自动分页拉全量并生成统计摘要）
+- "查最近/前 N 条 AI 告警"（⚠️ 重要：这是"查看样本"而非"统计全量"）：
+  · 传 pagesize=N（如 5/10/20），系统会**只返回 N 条**（不会自动拉全量）
+  · 注意：MCP ai_event_list 默认返回的是数据库前 N 行，不一定是"最近"N 行
+    （真实平台的 ai_event_list 工具**不支持排序参数**，这是已知限制）
+  · 示例：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":5}}}}]
+- "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间、无数量限定）：
+  · 不传 pagesize（或传大值如 10000），系统自动分页拉全量并统计
+  · [{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]
+- "查今天/昨天/某时间范围的 AI 告警"（按时间，统计全量）：
+  · 不传 pagesize，系统会自动分页拉全量并生成统计摘要
+  · [{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]
 
 # 约束
 1. 只能使用上述列出的工具，不要编造
@@ -350,13 +359,25 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     # 同步包装异步调用（兼容 有/无 运行中事件循环 两种情况）
     try:
         if task["task"] == "ai_event_list":
-            # ai_event_list：首次调用 + 自动分页全部在同一个事件循环内完成
-            # （避免跨 event loop 的 ClosedResourceError，确保统计基于全量数据）
+            # 🔧 修复"最近N条"查询返回全量的问题：
+            # 检测到明确的小 pagesize (≤20) 时，不要自动分页拉全量，尊重用户"只看样本"的语义
+            # 只有在"统计全量"场景（无 pagesize 或大值如 10000）才自动分页
+            user_pagesize = args.get("pagesize")
+            should_fetch_all = user_pagesize is None or user_pagesize > 20
+
             async def _invoke_with_paging():
                 first = await registry.invoke("ai_event_list", args, context)
                 if first.get("error"):
                     return first
-                return await _fetch_all_events_async(registry, args, context, first)
+                # 只有在需要统计全量时才自动分页
+                if should_fetch_all:
+                    return await _fetch_all_events_async(registry, args, context, first)
+                else:
+                    logger.info(
+                        f"[Executor] ai_event_list 检测到小 pagesize={user_pagesize}，"
+                        f"不自动拉全量（用户意图：查看样本/最近N条）"
+                    )
+                    return first
 
             result_data = _run_async(_invoke_with_paging())
         else:
@@ -715,6 +736,21 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
     response_parts = []
     chart_image_base64 = None
 
+    # 🔧 修复图表类型覆盖问题：优先使用用户在 visualize_alarms 中指定的图表
+    # 检查是否已有 visualize_alarms 的结果（包含用户指定的 chart_type）
+    user_chart = None
+    for r in tool_results:
+        if r.get("success") and r.get("tool") == "visualize_alarms":
+            result = r.get("result", {})
+            if "image_base64" in result:
+                user_chart = {
+                    "image": result["image_base64"],
+                    "type": result.get("chart_type", "bar"),
+                    "title": result.get("title", "告警统计图表"),
+                }
+                chart_image_base64 = result["image_base64"]
+                break
+
     for r in tool_results:
         if not r.get("success"):
             response_parts.append(f"⚠️ 工具 {r['tool']} 执行失败: {r.get('error', '未知错误')}")
@@ -851,12 +887,21 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
                     bar = '█' * max(1, int(pct / 5))
                     report.append(f"- **{key}**：{count} 条 ({pct:.1f}%) {bar}")
 
-                # 为聚合结果生成柱状图
-                chart_b64 = _generate_aggregate_chart(agg_data, group_label, total)
-                if chart_b64:
-                    chart_image_base64 = chart_b64
+                # 🔧 修复图表类型问题：只有在用户没用 visualize_alarms 时，才自己画柱状图
+                # 否则用户指定的 pie/line 会被覆盖
+                if not user_chart:
+                    chart_b64 = _generate_aggregate_chart(agg_data, group_label, total)
+                    if chart_b64:
+                        chart_image_base64 = chart_b64
+                        report.append(f"\n### 📊 可视化图表")
+                        report.append(f"已生成「{group_label}分布」柱状图\n")
+                else:
+                    # 用户已经指定了图表类型（pie/line/bar），复述一下
                     report.append(f"\n### 📊 可视化图表")
-                    report.append(f"已生成「{group_label}分布」柱状图\n")
+                    chart_type_cn = {"bar": "柱状图", "line": "折线图", "pie": "饼图"}.get(
+                        user_chart["type"], user_chart["type"]
+                    )
+                    report.append(f"已生成「{group_label}分布」{chart_type_cn}\n")
 
                 response_parts.append("\n".join(report))
             else:
