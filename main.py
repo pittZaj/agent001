@@ -181,6 +181,10 @@ async def chat(request: ChatRequest):
     }
     modality = "multimodal" if images else "text"
 
+    # 短期记忆键：session_id 即 thread_id。仅当非空时启用记忆，避免空/缺失 id 的
+    # 多次请求共享同一记忆桶（也让流式/非流式分支行为保持一致）。
+    sid = (request.session_id or "").strip()
+
     # ---------- 流式分支（SSE）：stream=true 时逐事件下发 ----------
     if request.stream:
         graph = get_graph()
@@ -188,7 +192,7 @@ async def chat(request: ChatRequest):
         async def _event_source():
             try:
                 async for evt in run_graph_stream(graph, initial_state, modality=modality,
-                                                  thread_id=request.session_id):
+                                                  thread_id=sid):
                     payload = dict(evt["data"])
                     if evt["event"] == "done":
                         payload["session_id"] = request.session_id
@@ -203,11 +207,10 @@ async def chat(request: ChatRequest):
     try:
         graph = get_graph()
 
-        # 同步调用图（传 thread_id：按 session 加载/保存短期记忆）
-        final_state = graph.invoke(
-            initial_state,
-            config={"configurable": {"thread_id": request.session_id}},
-        )
+        # 传 thread_id：按 session 加载/保存短期记忆。session_id 为空则不挂记忆，
+        # 等价于一次性无状态调用（避免空 id 请求共享同一记忆桶）。
+        config = {"configurable": {"thread_id": sid}} if sid else None
+        final_state = graph.invoke(initial_state, config=config) if config else graph.invoke(initial_state)
 
         elapsed_ms = int((time.time() - t0) * 1000)
         return ChatResponse(

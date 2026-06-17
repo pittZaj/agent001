@@ -10,7 +10,12 @@ class ChatRequest(BaseModel):
       - 文本+图片：  {"session_id": "u1", "message": "图里有人没戴安全帽吗？", "images": ["data:image/jpeg;base64,..."]}
       - 纯图片：     {"session_id": "u1", "images": ["data:image/jpeg;base64,..."]}
     """
-    session_id: str = Field(..., description="会话 ID")
+    session_id: str = Field(
+        ...,
+        description="会话 ID，同时是『短期记忆』的会话键（thread_id）：相同 session_id 的"
+                    "多次请求会累积上下文、自动多轮连贯；不同 session_id 相互隔离。"
+                    "务必每个独立对话用唯一且稳定的 id（推荐 UUID），切勿用常量或跨对话复用。",
+    )
     message: Optional[str] = Field(
         None, description="用户文本消息（纯图片时可不传）"
     )
@@ -19,7 +24,7 @@ class ChatRequest(BaseModel):
         description="图片列表，每项为 base64 data URL（data:image/...;base64,xxx）或裸 base64；"
                     "也支持 http(s) 图片 URL。可多张。",
     )
-    stream: bool = Field(False, description="是否流式输出（暂未启用）")
+    stream: bool = Field(False, description="是否流式输出（SSE）。传 true 返回 text/event-stream，不传/false 返回一次性 JSON。")
 
 
 class ChatResponse(BaseModel):
