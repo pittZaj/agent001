@@ -128,22 +128,30 @@ import threading  # noqa: E402
 from loguru import logger  # noqa: E402
 
 
-async def run_graph_stream(graph, initial_state: Dict[str, Any], *, modality: str):
+async def run_graph_stream(graph, initial_state: Dict[str, Any], *, modality: str, thread_id: str = ""):
     """把一次（同步）图执行驱动为 SSE 友好的异步事件生成器。
 
     工作线程内设置 emitter 并调用 graph.invoke()；本协程在事件循环里用
     run_in_executor 阻塞排空队列，逐条 yield {"event","data"}。最后补一条
     done（含完整 final_response 与 plan/tool_calls），与非流式响应同构。
+
+    thread_id：短期记忆会话键。非空时通过 config 传给图，checkpointer 据此
+    加载/保存该会话历史，实现多轮记忆；为空则按无记忆的一次性调用执行。
     """
     emitter = StreamEmitter()
     result_box: Dict[str, Any] = {}
     err_box: Dict[str, Any] = {}
     t0 = time.time()
 
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+
     def _worker():
         token = set_emitter(emitter)
         try:
-            result_box["state"] = graph.invoke(initial_state)
+            if config is not None:
+                result_box["state"] = graph.invoke(initial_state, config=config)
+            else:
+                result_box["state"] = graph.invoke(initial_state)
         except Exception as e:  # noqa: BLE001
             logger.exception("[stream] 图执行失败")
             err_box["detail"] = f"{type(e).__name__}: {e}"

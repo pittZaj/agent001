@@ -10,6 +10,7 @@ from graph.state import AgentState
 from utils import CONFIG
 from skills import get_skill_registry
 from graph.streaming import emit_status, stream_llm, tool_label
+from graph.memory import history_prompt_block
 
 
 def _format_skills_grouped(skills) -> str:
@@ -202,6 +203,15 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         HumanMessage(content=state["user_message"]),
     ]
 
+    # 短期记忆：把本会话历史作为上下文拼进用户消息，便于指代消解
+    # （如"上面那条告警的详情""再画成饼图"）。无历史时为空串，零影响。
+    history_block = history_prompt_block(state.get("messages", []))
+    if history_block:
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=history_block + "\n# 本轮用户问题\n" + state["user_message"]),
+        ]
+
     try:
         response = llm.invoke(messages)
         content = response.content
@@ -220,7 +230,6 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "plan": [{"task": t["task"], "args": t["args"], "status": "pending"} for t in plan],
                 "current_task_idx": 0,
-                "messages": state.get("messages", []) + [HumanMessage(content=state["user_message"]), response],
             }
         else:
             # 降级：直接回复
@@ -228,7 +237,6 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "plan": [{"task": "direct_response", "args": {"text": content}, "status": "pending"}],
                 "current_task_idx": 0,
-                "messages": state.get("messages", []) + [HumanMessage(content=state["user_message"]), response],
             }
 
     except Exception as e:
@@ -1155,6 +1163,10 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
 
 请根据以上信息生成回答。"""
 
+    # 短期记忆：拼接本会话历史，便于回答时延续上下文（如"和刚才那次比"）。
+    history_block = history_prompt_block(state.get("messages", []))
+    if history_block:
+        user_prompt = history_block + "\n" + user_prompt
     emit_status("answering", "正在组织回答…")
     try:
         # 流式逐字生成（stream_llm 在非流式请求下等价于一次性返回全文）
@@ -1299,3 +1311,41 @@ def vlm_chat_node(state: AgentState) -> Dict[str, Any]:
                   "status": "completed", "result": tool_result}],
         "current_task_idx": 1,
     }
+
+
+# ===================== 短期记忆落盘节点（两条链路统一出口） =====================
+def memorize_node(state: AgentState) -> Dict[str, Any]:
+    """把本轮 [用户问题, 最终答案] 追加进 messages，由 checkpointer 按 thread_id 持久化。
+
+    设计要点（为什么单独设一个节点）：
+      - 之前 planner 自己往 messages 里塞"计划 JSON + 当前问题"，既存错了内容
+        （存的是 plan 不是答案），又在有 checkpointer 后会把历史重复追加。
+      - 这里作为 planner/vlm_chat 两条链路在 END 前的统一汇合点，只追加干净的
+        "问题 + 答案"对（答案剥离 base64 防止图片字节进记忆），逻辑单一可靠。
+      - state['messages'] 用 add_messages 累积：返回的新消息会被自动 append 到
+        既有历史之后，无需手动拼接旧列表（避免重复）。
+
+    多模态（看图）轮次同样记一条文本记忆：问题原文 + VLM 答案，
+    这样下一轮纯文本提问也能指代"刚才那张图说的…"。但历史里只存文本，不存图片字节。
+    """
+    from graph.memory import _strip_heavy
+
+    user_message = (state.get("user_message") or "").strip()
+    final_response = state.get("final_response") or ""
+
+    # 纯图无文字的轮次，用占位问题，保证历史可读
+    if not user_message:
+        if state.get("images"):
+            user_message = "（上传了图片）"
+        else:
+            # 无问题无答案：不写记忆
+            if not final_response:
+                return {}
+
+    new_msgs = [HumanMessage(content=user_message)]
+    if final_response:
+        new_msgs.append(AIMessage(content=_strip_heavy(final_response)))
+
+    logger.info(f"[Memorize] 写入短期记忆：+{len(new_msgs)} 条 session={state.get('session_id','')}")
+    return {"messages": new_msgs}
+

@@ -56,19 +56,22 @@ def _get_main_graph():
     return _MAIN_GRAPH
 
 
-def _run_main_agent(message: str, trace_id: str = "", images: list[str] | None = None) -> dict[str, Any]:
+def _run_main_agent(message: str, trace_id: str = "", images: list[str] | None = None,
+                    thread_id: str = "") -> dict[str, Any]:
     """调用增强主图，返回与 generated agent 一致的 dict 结构。
 
     images: 图片 base64 data URL 列表（可空）。非空时主图走 VLM 多模态对话分支。
+    thread_id: 短期记忆会话键。非空时 checkpointer 按它加载/保存历史，实现多轮记忆。
     """
     graph = _get_main_graph()
     state = {
-        "session_id": trace_id or "web", "user_message": message,
+        "session_id": thread_id or trace_id or "web", "user_message": message,
         "images": images or [],
         "plan": [], "current_task_idx": 0, "tool_results": [],
         "step_outputs": {}, "final_response": "", "error": None, "messages": [],
     }
-    out = graph.invoke(state)
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+    out = graph.invoke(state, config=config) if config else graph.invoke(state)
     return {
         "response": out.get("final_response", ""),
         "plan": out.get("plan", []),
@@ -83,11 +86,32 @@ def published_agent_names() -> list[str]:
     return [MAIN_AGENT_NAME] + list(list_agents().keys())
 
 
-def _stream_main_agent(message: str, images: list[str]):
+def session_turn_info(thread_id: str) -> tuple[int, bool]:
+    """返回某会话 (已完成轮数, 是否达到软上限需提示新建会话)。
+
+    从 checkpointer 读该 thread_id 的已存 messages 计 AI 回复条数。
+    读不到（新会话/未初始化）按 0 轮处理。
+    """
+    if not thread_id:
+        return 0, False
+    try:
+        from graph.memory import get_checkpointer, count_turns, SOFT_TURN_LIMIT
+        graph = _get_main_graph()
+        cfg = {"configurable": {"thread_id": thread_id}}
+        snap = graph.get_state(cfg)
+        msgs = (snap.values or {}).get("messages", []) if snap else []
+        turns = count_turns(msgs)
+        return turns, turns >= SOFT_TURN_LIMIT
+    except Exception:
+        return 0, False
+
+
+def _stream_main_agent(message: str, images: list[str], thread_id: str = ""):
     """主图流式驱动：工作线程跑 graph + emitter，本生成器同步排空队列逐步产出。
 
     展示策略：进度事件累积成"状态行"显示在顶部（引用块），LLM token 实时拼到
     答案区；done 时用完整 response 覆盖（确保统计/画图路径的内嵌图表也能渲染）。
+    thread_id：短期记忆会话键，非空时按它加载/保存历史。
     """
     import threading
     import time as _time
@@ -96,10 +120,11 @@ def _stream_main_agent(message: str, images: list[str]):
     graph = _get_main_graph()  # 触发 Skill Registry 初始化（首次）
     trace_id = str(uuid.uuid4())
     state = {
-        "session_id": trace_id, "user_message": message, "images": images,
+        "session_id": thread_id or trace_id, "user_message": message, "images": images,
         "plan": [], "current_task_idx": 0, "tool_results": [],
         "step_outputs": {}, "final_response": "", "error": None, "messages": [],
     }
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
 
     emitter = StreamEmitter()
     box: dict[str, Any] = {}
@@ -108,7 +133,7 @@ def _stream_main_agent(message: str, images: list[str]):
     def _worker():
         token = set_emitter(emitter)
         try:
-            box["state"] = graph.invoke(state)
+            box["state"] = graph.invoke(state, config=config) if config else graph.invoke(state)
         except Exception:
             box["error"] = traceback.format_exc()
         finally:
@@ -225,11 +250,13 @@ def chat_once(agent_name: str, message: str, images: list[str] | None = None) ->
     return out
 
 
-def chat_stream(agent_name: str, message: str, images: list[str] | None = None):
+def chat_stream(agent_name: str, message: str, images: list[str] | None = None,
+                thread_id: str = ""):
     """流式单轮调用：生成器，逐步 yield (partial_text, out_or_None)。
 
     - 主智能体：复用主图 + StreamEmitter（在工作线程跑图，本生成器同步排空队列）。
       逐字/进度实时产出；结束时给出含 plan/tool_results/耗时 的完整 out。
+      thread_id 非空时按它加载/保存短期记忆，实现多轮连贯。
     - 生成式 agent：不支持流式，回退为一次性 chat_once，仅 yield 一次最终结果。
 
     yield 约定：
@@ -246,13 +273,13 @@ def chat_stream(agent_name: str, message: str, images: list[str] | None = None):
                           "plan": [], "tool_results": [], "trace_id": "", "elapsed_ms": 0}
         return
 
-    # 生成式 agent：无流式能力，直接走一次性调用
+    # 生成式 agent：无流式能力，也不支持短期记忆，直接走一次性调用
     if agent_name != MAIN_AGENT_NAME:
         out = chat_once(agent_name, message, images=images)
         yield out.get("response", ""), out
         return
 
-    yield from _stream_main_agent(message, images)
+    yield from _stream_main_agent(message, images, thread_id=thread_id)
 
 
 def format_debug_panel(out: dict[str, Any]) -> str:

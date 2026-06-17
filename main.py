@@ -187,7 +187,8 @@ async def chat(request: ChatRequest):
 
         async def _event_source():
             try:
-                async for evt in run_graph_stream(graph, initial_state, modality=modality):
+                async for evt in run_graph_stream(graph, initial_state, modality=modality,
+                                                  thread_id=request.session_id):
                     payload = dict(evt["data"])
                     if evt["event"] == "done":
                         payload["session_id"] = request.session_id
@@ -202,8 +203,11 @@ async def chat(request: ChatRequest):
     try:
         graph = get_graph()
 
-        # 同步调用图
-        final_state = graph.invoke(initial_state)
+        # 同步调用图（传 thread_id：按 session 加载/保存短期记忆）
+        final_state = graph.invoke(
+            initial_state,
+            config={"configurable": {"thread_id": request.session_id}},
+        )
 
         elapsed_ms = int((time.time() - t0) * 1000)
         return ChatResponse(
