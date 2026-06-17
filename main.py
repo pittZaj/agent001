@@ -9,6 +9,7 @@ KSAgent FastAPI 入口
 """
 import sys
 import time
+import json
 from pathlib import Path
 
 # 添加当前目录到 sys.path（便于直接 python main.py 启动）
@@ -20,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from utils import CONFIG
 from models import (
@@ -29,7 +31,7 @@ from models import (
     JudgeResponse,
     HealthResponse,
 )
-from graph import get_graph
+from graph import get_graph, run_graph_stream
 from utils.vlm import get_vlm_client
 
 
@@ -162,23 +164,43 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="message 与 images 不能同时为空")
 
     logger.info(
-        f"[Chat] session={request.session_id} msg_len={len(message)} images={len(images)}"
+        f"[Chat] session={request.session_id} msg_len={len(message)} images={len(images)} stream={request.stream}"
     )
 
+    initial_state = {
+        "session_id": request.session_id,
+        "user_message": message,
+        "images": images,
+        "plan": [],
+        "current_task_idx": 0,
+        "tool_results": [],
+        "step_outputs": {},
+        "final_response": "",
+        "error": None,
+        "messages": [],
+    }
+    modality = "multimodal" if images else "text"
+
+    # ---------- 流式分支（SSE）：stream=true 时逐事件下发 ----------
+    if request.stream:
+        graph = get_graph()
+
+        async def _event_source():
+            try:
+                async for evt in run_graph_stream(graph, initial_state, modality=modality):
+                    payload = dict(evt["data"])
+                    if evt["event"] == "done":
+                        payload["session_id"] = request.session_id
+                    yield {"event": evt["event"], "data": json.dumps(payload, ensure_ascii=False)}
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[Chat-Stream] 处理失败: {e}")
+                yield {"event": "error", "data": json.dumps({"detail": str(e)}, ensure_ascii=False)}
+
+        return EventSourceResponse(_event_source())
+
+    # ---------- 非流式分支（保持原行为不变）----------
     try:
         graph = get_graph()
-        initial_state = {
-            "session_id": request.session_id,
-            "user_message": message,
-            "images": images,
-            "plan": [],
-            "current_task_idx": 0,
-            "tool_results": [],
-            "step_outputs": {},
-            "final_response": "",
-            "error": None,
-            "messages": [],
-        }
 
         # 同步调用图
         final_state = graph.invoke(initial_state)
@@ -187,7 +209,7 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             session_id=request.session_id,
             response=final_state.get("final_response", ""),
-            modality="multimodal" if images else "text",
+            modality=modality,
             plan=final_state.get("plan", []),
             tool_calls=final_state.get("tool_results", []),
             elapsed_ms=elapsed_ms,
@@ -245,6 +267,11 @@ def main():
         port=server_config["port"],
         reload=server_config["reload"],
         log_level=server_config["log_level"],
+        # 关键：强制标准 asyncio 事件循环，禁用 uvloop。
+        #   MCP client 用 nest_asyncio 在同步图节点里跨事件循环调用工具，
+        #   而 nest_asyncio 无法 patch uvloop（报 "Can't patch loop of type uvloop.Loop"），
+        #   且 uvloop 线程中加载 torch/CUDA C 扩展易引发段错误。用标准循环规避两者。
+        loop="asyncio",
     )
 
 

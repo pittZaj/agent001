@@ -51,10 +51,11 @@ def _file_to_data_url(path: str) -> str | None:
 
 
 def chat_send(history, agent_name, mm_input):
-    """ChatGPT 风格：每条都独立调用 agent.run。
+    """ChatGPT 风格 + 流式：每条独立调用，逐步刷新对话窗（生成器）。
 
     mm_input 为 MultimodalTextbox 的值：{"text": str, "files": [filepath, ...]}。
     支持三种输入：纯文本 / 文本+图片 / 纯图片。
+    yield (history, None, debug)：边收边刷新最后一条 assistant 消息。
     """
     history = history or []
     text = (mm_input or {}).get("text", "") or ""
@@ -62,7 +63,8 @@ def chat_send(history, agent_name, mm_input):
 
     # 文本与图片至少有一个
     if not text.strip() and not files:
-        return history, None, ""
+        yield history, None, ""
+        return
 
     # 图片文件 → data URL
     images = [u for u in (_file_to_data_url(f) for f in files) if u]
@@ -73,11 +75,14 @@ def chat_send(history, agent_name, mm_input):
     if text.strip():
         history.append({"role": "user", "content": text})
 
-    out = agent_chat.chat_once(agent_name, text, images=images)
-    history.append({"role": "assistant", "content": out.get("response", "")})
-    debug = agent_chat.format_debug_panel(out)
-    # 清空输入框（MultimodalTextbox 用空字典）
-    return history, None, debug
+    # 占位的 assistant 气泡，随流式增量刷新
+    history.append({"role": "assistant", "content": "⏳ 处理中…"})
+    last_out = None
+    for partial, out in agent_chat.chat_stream(agent_name, text, images=images):
+        history[-1]["content"] = partial
+        last_out = out
+        debug = agent_chat.format_debug_panel(out) if out else ""
+        yield history, None, debug
 
 
 def chat_clear():

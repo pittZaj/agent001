@@ -9,6 +9,7 @@ from loguru import logger
 from graph.state import AgentState
 from utils import CONFIG
 from skills import get_skill_registry
+from graph.streaming import emit_status, stream_llm, tool_label
 
 
 def _format_skills_grouped(skills) -> str:
@@ -73,6 +74,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     输出：plan（任务列表）
     """
     logger.info(f"[Planner] 开始规划任务，用户消息: {state['user_message']}")
+    emit_status("planning", "正在理解你的问题并规划任务…")
 
     # 从 Skill Registry 获取可用工具，按平台分类组织
     registry = get_skill_registry()
@@ -211,6 +213,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         if json_match:
             plan = json.loads(json_match.group())
             logger.info(f"[Planner] 生成计划: {plan}")
+            _tasks = [t.get("task", "") for t in plan]
+            if _tasks and _tasks != ["direct_response"]:
+                emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
+                            + "、".join(tool_label(t) for t in _tasks))
             return {
                 "plan": [{"task": t["task"], "args": t["args"], "status": "pending"} for t in plan],
                 "current_task_idx": 0,
@@ -342,6 +348,12 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
 
     task = plan[idx]
     logger.info(f"[Executor] 执行任务 {idx + 1}/{len(plan)}: {task['task']}")
+    if task["task"] != "direct_response":
+        emit_status(
+            "executing",
+            "正在执行步骤 " + str(idx + 1) + "/" + str(len(plan))
+            + "：" + tool_label(task["task"]) + "…",
+        )
 
     # 步骤间传参：替换参数中的模板变量
     args = task["args"].copy() if task["args"] else {}
@@ -1011,7 +1023,11 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     if (len(tool_results) == 1
             and tool_results[0].get("success")
             and tool_results[0].get("tool") == "direct_response"):
-        return {"final_response": tool_results[0]["result"].get("text", "")}
+        _text = tool_results[0]["result"].get("text", "")
+        emit_status("answering", "正在组织回答…")
+        from graph.streaming import emit_token as _emit_token
+        _emit_token(_text)  # direct_response 文本一次性下发（无 LLM 可逐字）
+        return {"final_response": _text}
 
     # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
     # 绝不能让下游 LLM 凭空编造无关告警（修复"打电话/跳舞也返回数据"的幻觉问题）。
@@ -1101,6 +1117,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
             f"(large_data={has_large_data}, event_array={has_event_array}, "
             f"aggregate={has_aggregate}, summary_len={len(tools_summary)})"
         )
+        emit_status("summarizing", "正在统计分析并生成图表…")
         return _generate_summary_response(user_message, tool_results)
 
     # 用 LLM 生成自然语言回答
@@ -1138,12 +1155,13 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
 
 请根据以上信息生成回答。"""
 
+    emit_status("answering", "正在组织回答…")
     try:
-        response = llm.invoke([
+        # 流式逐字生成（stream_llm 在非流式请求下等价于一次性返回全文）
+        final_response = stream_llm(llm, [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ])
-        final_response = response.content
     except Exception as e:
         logger.error(f"[Formatter] LLM 格式化失败: {e}")
         # 降级：简单拼接
@@ -1255,11 +1273,11 @@ def vlm_chat_node(state: AgentState) -> Dict[str, Any]:
             max_tokens=llm_config.get("max_tokens", 2048),
             timeout=llm_config.get("timeout", 60),
         )
-        response = llm.invoke([
+        emit_status("analyzing", "正在看图并分析…")
+        answer = stream_llm(llm, [
             SystemMessage(content=system_prompt),
             HumanMessage(content=content),
         ])
-        answer = response.content if hasattr(response, "content") else str(response)
     except Exception as e:
         logger.exception(f"[VLMChat] VLM 调用失败")
         answer = f"图像分析失败: {type(e).__name__}: {e}"

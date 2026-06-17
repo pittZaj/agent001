@@ -4,19 +4,32 @@
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
 from skills import Skill, SkillType
-from .service import KnowledgeBaseService
+
+if TYPE_CHECKING:  # 仅类型检查时引用，运行时不触发重型 import
+    from .service import KnowledgeBaseService
 
 # 全局单例（首次调用时才加载模型，避免启动即占显存）
-_kb_service: KnowledgeBaseService | None = None
+_kb_service: "KnowledgeBaseService | None" = None
 
 
-def get_kb_service() -> KnowledgeBaseService:
-    """获取 KB Service 单例"""
+def get_kb_service() -> "KnowledgeBaseService":
+    """获取 KB Service 单例。
+
+    关键（2026-06-16）：service.py 顶层 import 了 sentence_transformers /
+    FlagEmbedding / torch（CUDA C 扩展）。若在 FastAPI(uvicorn) 启动的 lifespan
+    里随 `register_kb_skill` 一并加载，会与已加载的 MCP/uvloop/matplotlib 等库
+    在 C 层产生 OpenMP/线程冲突，导致进程段错误（SIGSEGV）。
+    因此把 service 的 import 延迟到首次真正检索时——FastAPI 启动与多模态/文本
+    对话链路都不需要 RAG，按需加载既避开启动崩溃，也更省显存、启动更快。
+    """
     global _kb_service
     if _kb_service is None:
+        from .service import KnowledgeBaseService  # 延迟 import（见上方说明）
         _kb_service = KnowledgeBaseService()
     return _kb_service
 

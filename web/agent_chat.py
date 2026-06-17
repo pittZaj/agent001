@@ -83,6 +83,83 @@ def published_agent_names() -> list[str]:
     return [MAIN_AGENT_NAME] + list(list_agents().keys())
 
 
+def _stream_main_agent(message: str, images: list[str]):
+    """主图流式驱动：工作线程跑 graph + emitter，本生成器同步排空队列逐步产出。
+
+    展示策略：进度事件累积成"状态行"显示在顶部（引用块），LLM token 实时拼到
+    答案区；done 时用完整 response 覆盖（确保统计/画图路径的内嵌图表也能渲染）。
+    """
+    import threading
+    import time as _time
+    from graph.streaming import StreamEmitter, set_emitter, reset_emitter, _SENTINEL
+
+    graph = _get_main_graph()  # 触发 Skill Registry 初始化（首次）
+    trace_id = str(uuid.uuid4())
+    state = {
+        "session_id": trace_id, "user_message": message, "images": images,
+        "plan": [], "current_task_idx": 0, "tool_results": [],
+        "step_outputs": {}, "final_response": "", "error": None, "messages": [],
+    }
+
+    emitter = StreamEmitter()
+    box: dict[str, Any] = {}
+    t0 = _time.time()
+
+    def _worker():
+        token = set_emitter(emitter)
+        try:
+            box["state"] = graph.invoke(state)
+        except Exception:
+            box["error"] = traceback.format_exc()
+        finally:
+            reset_emitter(token)
+            emitter.close()
+
+    threading.Thread(target=_worker, name="ksagent-web-stream", daemon=True).start()
+
+    status_lines: list[str] = []
+    answer = ""
+    while True:
+        item = emitter.get()
+        if item is _SENTINEL:
+            break
+        ev, data = item["event"], item["data"]
+        if ev == "status":
+            status_lines.append(data.get("message", ""))
+        elif ev == "token":
+            answer += data.get("text", "")
+        yield _compose(status_lines, answer), None
+
+    if box.get("error"):
+        out = {"response": "", "plan": [], "tool_results": [], "error": box["error"],
+               "trace_id": trace_id, "elapsed_ms": int((_time.time() - t0) * 1000)}
+        yield f"❌ 执行失败:\n```\n{box['error']}\n```", out
+        return
+
+    st = box.get("state", {})
+    final = st.get("final_response", "") or answer
+    out = {
+        "response": final, "plan": st.get("plan", []),
+        "tool_results": st.get("tool_results", []), "error": st.get("error"),
+        "trace_id": trace_id, "elapsed_ms": int((_time.time() - t0) * 1000),
+    }
+    # 最终用完整 response 覆盖（含内嵌图表 markdown），状态行收起为一行小结
+    yield _compose(status_lines, final, collapsed=True), out
+
+
+def _compose(status_lines: list[str], answer: str, collapsed: bool = False) -> str:
+    """把进度状态行 + 答案拼成 Markdown：进度用引用块显示，答案正文在下方。"""
+    parts = []
+    if status_lines:
+        if collapsed:
+            parts.append(f"> ✅ {status_lines[-1]}")
+        else:
+            parts.append("> " + "\n> ".join(f"⏳ {s}" for s in status_lines))
+    if answer:
+        parts.append(answer)
+    return "\n\n".join(parts) if parts else "⏳ 处理中…"
+
+
 def _get_run(name: str):
     """获取 agent 的 run 函数（带缓存）"""
     if name == MAIN_AGENT_NAME:
@@ -146,6 +223,36 @@ def chat_once(agent_name: str, message: str, images: list[str] | None = None) ->
     out.setdefault("trace_id", trace_id)
     out["elapsed_ms"] = int((time.time() - t0) * 1000)
     return out
+
+
+def chat_stream(agent_name: str, message: str, images: list[str] | None = None):
+    """流式单轮调用：生成器，逐步 yield (partial_text, out_or_None)。
+
+    - 主智能体：复用主图 + StreamEmitter（在工作线程跑图，本生成器同步排空队列）。
+      逐字/进度实时产出；结束时给出含 plan/tool_results/耗时 的完整 out。
+    - 生成式 agent：不支持流式，回退为一次性 chat_once，仅 yield 一次最终结果。
+
+    yield 约定：
+      (text, None)  → 中间增量（text 为"截至目前应显示的完整文本"，已含进度+答案）
+      (text, out)   → 最终（out 为完整 dict，供 debug 面板渲染）
+    """
+    images = images or []
+    if not agent_name:
+        yield "(未选择 Agent)", {"response": "(未选择 Agent)", "error": "no agent selected",
+                                 "plan": [], "tool_results": [], "trace_id": "", "elapsed_ms": 0}
+        return
+    if (not message or not message.strip()) and not images:
+        yield "(空消息)", {"response": "(空消息)", "error": "empty message",
+                          "plan": [], "tool_results": [], "trace_id": "", "elapsed_ms": 0}
+        return
+
+    # 生成式 agent：无流式能力，直接走一次性调用
+    if agent_name != MAIN_AGENT_NAME:
+        out = chat_once(agent_name, message, images=images)
+        yield out.get("response", ""), out
+        return
+
+    yield from _stream_main_agent(message, images)
 
 
 def format_debug_panel(out: dict[str, Any]) -> str:
