@@ -205,12 +205,19 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
 
     注意：每个线程/事件循环独立维护一个 MCP Client
         在不同线程调用时会自动创建新的连接，避免跨事件循环问题
+
+    🔧 优化 4.1：配合 streaming.py 的事件循环复用，一次图执行内所有工具调用
+        都在同一线程（有长驻事件循环），因此会命中此处的缓存，只握手一次
     """
     # 从线程本地存储获取
     if not hasattr(_thread_local, 'client'):
         _thread_local.client = None
 
     client = _thread_local.client
+
+    # 🔧 优化 4.1：添加日志追踪连接复用情况
+    logger.debug(f"[MCP] get_mcp_client 调用 (thread={threading.current_thread().name}, "
+                f"cached={client is not None}, force_reconnect={force_reconnect})")
 
     # 检查是否需要重连
     need_reconnect = force_reconnect
@@ -222,6 +229,7 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
 
     # 如果不需要重连且已存在，直接返回
     if client is not None and not need_reconnect:
+        logger.debug(f"[MCP] 复用已有连接 (thread={threading.current_thread().name})")  # 🔧 优化 4.1
         return client
 
     # 需要重连时先关闭旧连接
@@ -233,6 +241,7 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
         _thread_local.client = None
 
     # 创建新连接
+    logger.info(f"[MCP] 创建新连接 (thread={threading.current_thread().name})")  # 🔧 优化 4.1：标记新连接
     client = MCPClient()
     if not client.enabled:
         _thread_local.client = client
@@ -250,6 +259,7 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
             headers=None,
             timeout=timeout,
         )
+        logger.info(f"[MCP] HTTP 连接已建立 (thread={threading.current_thread().name}, endpoint={endpoint})")  # 🔧 优化 4.1
     else:
         # stdio 兼容路径（保留向后兼容，主流程已切到 http）
         await client.connect_stdio_server(
@@ -258,6 +268,7 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
             args=["-m", "mcp_servers.ksipms_server"],
             env={},
         )
+        logger.info(f"[MCP] stdio 连接已建立 (thread={threading.current_thread().name})")  # 🔧 优化 4.1
 
     # 保存到线程本地存储
     _thread_local.client = client

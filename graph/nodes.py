@@ -316,26 +316,19 @@ async def _fetch_all_events_async(registry, args: dict, context: dict, first_res
 
 
 def _run_async(coro):
-    """在 同步/异步 两种上下文中安全运行协程。
+    """在同步图节点里安全运行协程：统一投递到进程级后台事件循环执行。
 
-    - 无运行中事件循环（如 graph.invoke 同步调用）：用独立线程跑 asyncio.run，
-      避免 Python 3.12 下 get_event_loop 抛 RuntimeError。
-    - 有运行中循环：用 nest_asyncio 复用当前循环。
+    🔧 根因修复（取代旧的 nest_asyncio / 每次 asyncio.run 方案）：
+        MCP 的 streamablehttp_client 会开启一个与"创建它的任务"绑定的 anyio 取消
+        作用域。旧方案每次工具调用都是新任务/新循环，复用连接后销毁时会"跨任务退出
+        取消作用域"而崩溃（统计+画图这类多步任务必触发，并导致图表丢失）。
+
+        改为把所有 MCP 协程投递到一个**永不中途关闭**的后台循环（utils.async_loop）。
+        连接在该循环内创建一次、全程复用，取消作用域始终在同一循环里，杜绝崩溃；
+        同时天然实现跨请求连接复用（优化 4.1 的真正目标）。
     """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop is None:
-        # 在新线程里跑一个干净的事件循环，避免污染调用方
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            return ex.submit(lambda: asyncio.run(coro)).result()
-    else:
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(coro)
+    from utils.async_loop import run_on_background_loop
+    return run_on_background_loop(coro)
 
 
 def executor_node(state: AgentState) -> Dict[str, Any]:
@@ -942,7 +935,16 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
     # 将图表直接内联到 markdown（Gradio Chatbot 支持 base64 图片渲染），
     # 不依赖 Web 层单独取 chart_image_base64 字段，确保"已生成图表"能真正显示。
     if chart_image_base64:
-        final_response += f"\n\n![统计图表](data:image/png;base64,{chart_image_base64})"
+        # 🔧 修复图表不显示：chart_image_base64 有两种来源，前缀不一致——
+        #   · visualize_alarms 返回的已带 "data:image/png;base64," 前缀
+        #   · _generate_*_chart 返回的是裸 base64（无前缀）
+        # 统一规范化，避免拼出 "data:image/png;base64,data:image/png;base64,..." 双前缀，
+        # 双前缀会导致 Gradio 无法解析渲染（用户实测"回复中无图像"的根因）。
+        if chart_image_base64.startswith("data:"):
+            _img_src = chart_image_base64
+        else:
+            _img_src = f"data:image/png;base64,{chart_image_base64}"
+        final_response += f"\n\n![统计图表]({_img_src})"
 
     return {
         "final_response": final_response,

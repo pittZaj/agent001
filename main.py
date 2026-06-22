@@ -49,8 +49,11 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
     # 初始化 Skill Registry
+    #   在进程级后台循环上初始化，使 MCP 连接落在 bg-loop 线程；运行期同步节点的
+    #   工具调用（_run_async → run_on_background_loop）跑在同一线程，复用此连接。
     from skills.init import init_skill_registry
-    await init_skill_registry()
+    from utils.async_loop import run_on_background_loop
+    run_on_background_loop(init_skill_registry())
     logger.info("Skill Registry 已就绪")
 
     # 预热：构建图

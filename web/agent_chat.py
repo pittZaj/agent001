@@ -44,14 +44,16 @@ def _get_main_graph():
     """懒加载主图（含 Skill Registry 初始化）"""
     global _MAIN_GRAPH
     if _MAIN_GRAPH is None:
-        import asyncio
         # agent 项目根目录（agent/），主图代码在此
         agent_root = PROJECT_ROOT.parent
         if str(agent_root) not in sys.path:
             sys.path.insert(0, str(agent_root))
         from skills.init import init_skill_registry
         from graph import get_graph
-        asyncio.run(init_skill_registry())
+        # 在进程级后台循环上初始化：MCP 连接由此在 bg-loop 线程创建，
+        # 运行期工具调用（同样跑在该线程）才能命中线程本地缓存、复用同一条连接。
+        from utils.async_loop import run_on_background_loop
+        run_on_background_loop(init_skill_registry())
         _MAIN_GRAPH = get_graph()
     return _MAIN_GRAPH
 
