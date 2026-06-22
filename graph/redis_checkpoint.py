@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 from contextlib import contextmanager
 
 import redis
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, ConfigurableFieldSpec
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointMetadata, CheckpointTuple
 from loguru import logger
 
@@ -38,6 +38,11 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
         - 线程安全（Redis 自带）
         - 支持多租户隔离（通过 thread_id）
     """
+
+    # 定义 LangGraph 需要的 config_specs
+    config_specs = [
+        ConfigurableFieldSpec(id="thread_id", annotation=str, name="Thread ID"),
+    ]
 
     def __init__(
         self,
@@ -72,6 +77,7 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
         config: RunnableConfig,
         checkpoint: Checkpoint,
         metadata: CheckpointMetadata,
+        new_versions: dict,
     ) -> RunnableConfig:
         """保存 checkpoint 到 Redis
 
@@ -79,6 +85,7 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
             config: 配置（含 thread_id）
             checkpoint: 检查点数据
             metadata: 元数据
+            new_versions: 通道版本信息（LangGraph 内部使用）
 
         Returns:
             更新后的配置
@@ -86,23 +93,52 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
-        # 序列化 checkpoint
+        # 确保 metadata 包含必要的字段
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        # LangGraph 需要的默认字段
+        if "step" not in metadata:
+            metadata["step"] = 0
+        if "source" not in metadata:
+            metadata["source"] = "update"
+        if "writes" not in metadata:
+            metadata["writes"] = {}
+
+        # 序列化 checkpoint（包括 new_versions）
         data = {
             "checkpoint": checkpoint,
             "metadata": metadata,
+            "new_versions": new_versions,
         }
         key = self._make_key(thread_id, checkpoint_ns)
 
         try:
             # 使用 pickle 序列化（兼容 LangGraph 的复杂对象）
             value = pickle.dumps(data)
-            self.redis.setex(key, self.ttl, value)
+            # 使用 set 替代 setex（兼容旧版本 Redis）
+            self.redis.set(key, value, ex=self.ttl)
             logger.debug(f"[Memory] Checkpoint 已保存: {key}")
         except Exception as e:
             logger.error(f"[Memory] Checkpoint 保存失败: {e}")
             raise
 
         return config
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[Tuple[str, Any]],
+        task_id: str,
+    ) -> None:
+        """保存写入操作（LangGraph 内部使用）
+
+        注意：当前实现为简化版，直接忽略 writes
+        因为我们的 checkpoint 策略是覆盖写，不需要增量写入
+        """
+        # 简化实现：不需要单独保存 writes
+        # 完整的 checkpoint 已经包含所有状态
+        pass
 
     def get(self, config: RunnableConfig) -> Optional[Checkpoint]:
         """从 Redis 加载 checkpoint
@@ -127,6 +163,47 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
             return data["checkpoint"]
         except Exception as e:
             logger.warning(f"[Memory] Checkpoint 加载失败: {e}")
+            return None
+
+    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """获取 checkpoint tuple（LangGraph 需要的方法）
+
+        Args:
+            config: 配置（含 thread_id）
+
+        Returns:
+            CheckpointTuple 或 None
+        """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        key = self._make_key(thread_id, checkpoint_ns)
+
+        try:
+            value = self.redis.get(key)
+            if not value:
+                return None
+
+            data = pickle.loads(value)
+            metadata = data.get("metadata", {})
+
+            # 确保 metadata 包含 LangGraph 需要的字段
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if "step" not in metadata:
+                metadata["step"] = 0
+            if "source" not in metadata:
+                metadata["source"] = "update"
+            if "writes" not in metadata:
+                metadata["writes"] = {}
+
+            logger.debug(f"[Memory] Checkpoint tuple 已加载: {key}")
+            return CheckpointTuple(
+                config=config,
+                checkpoint=data["checkpoint"],
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning(f"[Memory] Checkpoint tuple 加载失败: {e}")
             return None
 
     def list(

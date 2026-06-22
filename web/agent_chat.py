@@ -66,14 +66,19 @@ def _run_main_agent(message: str, trace_id: str = "", images: list[str] | None =
     thread_id: 短期记忆会话键。非空时 checkpointer 按它加载/保存历史，实现多轮记忆。
     """
     graph = _get_main_graph()
+
+    # 如果没有 thread_id，生成临时的（因为 checkpointer 要求必须有）
+    if not thread_id:
+        thread_id = f"temp_{trace_id or uuid.uuid4().hex[:12]}"
+
     state = {
-        "session_id": thread_id or trace_id or "web", "user_message": message,
+        "session_id": thread_id, "user_message": message,
         "images": images or [],
         "plan": [], "current_task_idx": 0, "tool_results": [],
         "step_outputs": {}, "final_response": "", "error": None, "messages": [],
     }
-    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-    out = graph.invoke(state, config=config) if config else graph.invoke(state)
+    config = {"configurable": {"thread_id": thread_id}}
+    out = graph.invoke(state, config=config)
     return {
         "response": out.get("final_response", ""),
         "plan": out.get("plan", []),
@@ -121,12 +126,17 @@ def _stream_main_agent(message: str, images: list[str], thread_id: str = ""):
 
     graph = _get_main_graph()  # 触发 Skill Registry 初始化（首次）
     trace_id = str(uuid.uuid4())
+
+    # 如果没有 thread_id，生成临时的（因为 checkpointer 要求必须有）
+    if not thread_id:
+        thread_id = f"temp_{trace_id[:12]}"
+
     state = {
-        "session_id": thread_id or trace_id, "user_message": message, "images": images,
+        "session_id": thread_id, "user_message": message, "images": images,
         "plan": [], "current_task_idx": 0, "tool_results": [],
         "step_outputs": {}, "final_response": "", "error": None, "messages": [],
     }
-    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+    config = {"configurable": {"thread_id": thread_id}}
 
     emitter = StreamEmitter()
     box: dict[str, Any] = {}
@@ -135,7 +145,7 @@ def _stream_main_agent(message: str, images: list[str], thread_id: str = ""):
     def _worker():
         token = set_emitter(emitter)
         try:
-            box["state"] = graph.invoke(state, config=config) if config else graph.invoke(state)
+            box["state"] = graph.invoke(state, config=config)
         except Exception:
             box["error"] = traceback.format_exc()
         finally:
@@ -337,3 +347,183 @@ def reload_agent(name: str) -> str:
         return f"❌ Agent `{name}` 的代码文件不存在: {e}"
     except Exception as e:
         return f"❌ 加载失败: {type(e).__name__}: {e}\n\n{traceback.format_exc()}"
+
+
+# ===================== 会话管理功能（for Web UI）=====================
+
+def list_user_sessions(user_id: str = "default") -> list[dict]:
+    """列出指定用户的所有会话
+
+    Args:
+        user_id: 用户 ID（模拟多租户）
+
+    Returns:
+        会话列表，每个会话包含：
+        - thread_id: 会话 ID
+        - title: 会话标题
+        - message_count: 消息数
+        - turn_count: 对话轮数
+    """
+    try:
+        # 确保主图已初始化（这会初始化 Redis checkpointer）
+        _get_main_graph()
+
+        from graph.session_manager import get_session_manager
+
+        manager = get_session_manager()
+        all_sessions = manager.list_sessions()
+
+        # 过滤属于该用户的会话（通过 thread_id 前缀）
+        user_prefix = f"sess_{user_id}_"
+        user_sessions = [
+            s for s in all_sessions
+            if s["thread_id"].startswith(user_prefix)
+        ]
+
+        # 按最后更新时间排序（新的在前）
+        # 注意：当前 last_update 为 None，后续可优化
+        return user_sessions
+
+    except Exception as e:
+        logger.error(f"[list_user_sessions] 获取会话列表失败: {e}")
+        return []
+
+
+def delete_user_session(thread_id: str) -> tuple[bool, str]:
+    """删除指定会话
+
+    Args:
+        thread_id: 会话 ID
+
+    Returns:
+        (是否成功, 提示消息)
+    """
+    try:
+        # 确保主图已初始化
+        _get_main_graph()
+
+        from graph.session_manager import get_session_manager
+
+        manager = get_session_manager()
+        success = manager.delete_session(thread_id)
+
+        if success:
+            return True, f"✅ 会话已删除"
+        else:
+            return False, "❌ 删除失败（会话可能不存在）"
+
+    except Exception as e:
+        logger.error(f"[delete_user_session] 删除失败: {e}")
+        return False, f"❌ 删除失败: {e}"
+
+
+def rename_user_session(thread_id: str, new_title: str) -> tuple[bool, str]:
+    """重命名会话
+
+    Args:
+        thread_id: 会话 ID
+        new_title: 新标题
+
+    Returns:
+        (是否成功, 提示消息)
+    """
+    if not new_title or not new_title.strip():
+        return False, "❌ 标题不能为空"
+
+    try:
+        # 确保主图已初始化
+        _get_main_graph()
+
+        from graph.session_manager import get_session_manager
+
+        manager = get_session_manager()
+        success = manager.rename_session(thread_id, new_title.strip())
+
+        if success:
+            return True, f"✅ 已重命名为「{new_title.strip()}」"
+        else:
+            return False, "❌ 重命名失败"
+
+    except Exception as e:
+        logger.error(f"[rename_user_session] 重命名失败: {e}")
+        return False, f"❌ 重命名失败: {e}"
+
+
+def get_session_title(thread_id: str) -> str:
+    """获取会话标题（从 Redis 元数据或首条消息）
+
+    Args:
+        thread_id: 会话 ID
+
+    Returns:
+        会话标题
+    """
+    try:
+        # 确保主图已初始化
+        _get_main_graph()
+
+        from graph.session_manager import get_session_manager
+
+        manager = get_session_manager()
+        metadata = manager.get_session_stats(thread_id)
+
+        if metadata:
+            return metadata.get("name", "新会话")
+        return "新会话"
+
+    except Exception:
+        return "新会话"
+
+
+def load_session_history(thread_id: str) -> list[dict]:
+    """从 Redis 加载会话的完整对话历史（转换为 Gradio messages 格式）
+
+    Args:
+        thread_id: 会话 ID
+
+    Returns:
+        Gradio chatbot 格式的消息列表
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
+    """
+    try:
+        # 确保主图已初始化
+        _get_main_graph()
+
+        from graph.memory import get_checkpointer
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        checkpointer = get_checkpointer()
+        config = {"configurable": {"thread_id": thread_id}}
+        checkpoint = checkpointer.get(config)
+
+        if not checkpoint:
+            return []
+
+        messages = checkpoint.get("channel_values", {}).get("messages", [])
+
+        # 转换为 Gradio 格式
+        history = []
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                content = msg.content
+                # 处理多模态内容
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict):
+                            if item.get("type") == "text":
+                                history.append({"role": "user", "content": item.get("text", "")})
+                            # 图片类型暂时忽略（无法从 base64 还原为文件路径）
+                        elif isinstance(item, str):
+                            history.append({"role": "user", "content": item})
+                else:
+                    history.append({"role": "user", "content": str(content)})
+
+            elif isinstance(msg, AIMessage):
+                history.append({"role": "assistant", "content": str(msg.content)})
+
+        logger.info(f"[load_session_history] 加载会话 {thread_id}，共 {len(history)} 条消息")
+        return history
+
+    except Exception as e:
+        logger.error(f"[load_session_history] 加载失败: {e}")
+        return []

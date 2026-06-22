@@ -27,3 +27,4 @@ aiohttp==3.11.10
 # 工具
 python-dotenv==1.0.1
 loguru==0.7.3
+redis==5.2.1

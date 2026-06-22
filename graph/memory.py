@@ -81,6 +81,7 @@ def get_checkpointer():
                     password=redis_config.get("password") or None,
                     db=redis_config.get("db", 0),
                     decode_responses=False,  # 使用 bytes 模式，兼容 pickle
+                    protocol=2,  # 使用 RESP2 协议，兼容旧版本 Redis
                 )
 
                 # 测试连接
@@ -132,7 +133,7 @@ def _msg_text(msg: BaseMessage) -> str:
 
 
 def build_history_context(messages: List[BaseMessage], *, exclude_last_human: bool = True) -> str:
-    """把累计的 messages 渲染成喂给 LLM 的"对话历史"文本块。
+    """把累计的 messages 渲染成喂给 LLM 的"对话历史"文本块（兼容旧接口）
 
     Args:
         messages: state['messages']，按时间顺序的 Human/AI 交替消息。
@@ -142,41 +143,12 @@ def build_history_context(messages: List[BaseMessage], *, exclude_last_human: bo
     Returns:
         多行字符串（含"用户:/助手:"前缀）；无历史时返回空串。
         已做：滑动窗口（最近 MAX_HISTORY_TURNS 轮）、单条截断、总字符上限。
+
+    Note: 此函数保持同步接口，供现有代码调用。智能摘要功能在异步上下文中使用。
     """
-    msgs = list(messages or [])
-    if exclude_last_human and msgs and isinstance(msgs[-1], HumanMessage):
-        msgs = msgs[:-1]
-    if not msgs:
-        return ""
-
-    # 滑动窗口：最近 N 轮 ≈ 最近 2N 条消息
-    msgs = msgs[-(MAX_HISTORY_TURNS * 2):]
-
-    # 逐条渲染（从新到旧累加，受总字符上限约束），最后反转回时间正序
-    rendered: list[str] = []
-    total = 0
-    for msg in reversed(msgs):
-        if isinstance(msg, HumanMessage):
-            role = "用户"
-        elif isinstance(msg, AIMessage):
-            role = "助手"
-        else:
-            continue
-        text = _msg_text(msg)
-        if not text:
-            continue
-        if len(text) > PER_MESSAGE_CHARS:
-            text = text[:PER_MESSAGE_CHARS] + "…（略）"
-        line = f"{role}：{text}"
-        if total + len(line) > MAX_HISTORY_CHARS:
-            break
-        rendered.append(line)
-        total += len(line)
-
-    if not rendered:
-        return ""
-    rendered.reverse()
-    return "\n".join(rendered)
+    return build_history_context_with_summary(
+        messages, exclude_last_human=exclude_last_human, use_summary=False
+    )
 
 
 def history_prompt_block(messages: List[BaseMessage]) -> str:
