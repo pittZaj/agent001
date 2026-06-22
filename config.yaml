@@ -34,6 +34,16 @@ database:
   pool_size: 10
   echo: false
 
+# Redis 配置（短期记忆持久化）
+redis:
+  enabled: true
+  addr: "192.168.1.90:6731"
+  password: ""
+  db: 0
+  # 记忆相关配置
+  key_prefix: "ksagent:memory:"
+  ttl: 2592000  # 30 天过期（秒）
+
 # FastAPI 服务
 server:
   host: "0.0.0.0"

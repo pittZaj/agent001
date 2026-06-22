@@ -48,19 +48,60 @@ _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(data:image/[^)]+\)")
 
 
 # ===================== checkpointer 单例 =====================
-_checkpointer: Optional[MemorySaver] = None
+_checkpointer = None
 
 
-def get_checkpointer() -> MemorySaver:
-    """返回进程内唯一的 checkpointer（短期记忆存储）。
+def get_checkpointer():
+    """返回持久化的 checkpointer（短期记忆存储）
 
-    用 MemorySaver：进程内存，重启清空 —— 正是"短期/会话级记忆"的语义。
-    若将来要跨进程/重启保留，换成 SqliteSaver(conn) 即可，上层无需改动。
+    存储策略：
+    - Redis：持久化存储，重启后记忆不丢失（生产环境）
+    - MemorySaver：进程内存，重启清空（降级/测试环境）
+
+    切换逻辑：
+    - 优先使用 Redis（如果配置启用且连接成功）
+    - 失败时降级到 MemorySaver
     """
     global _checkpointer
     if _checkpointer is None:
+        from utils import CONFIG
+
+        # 尝试使用 Redis
+        redis_config = CONFIG.get("redis", {})
+        if redis_config.get("enabled", False):
+            try:
+                import redis
+                from graph.redis_checkpoint import RedisCheckpointSaver
+
+                # 创建 Redis 客户端
+                host, port = redis_config["addr"].split(":")
+                redis_client = redis.Redis(
+                    host=host,
+                    port=int(port),
+                    password=redis_config.get("password") or None,
+                    db=redis_config.get("db", 0),
+                    decode_responses=False,  # 使用 bytes 模式，兼容 pickle
+                )
+
+                # 测试连接
+                redis_client.ping()
+
+                # 创建 Redis checkpointer
+                _checkpointer = RedisCheckpointSaver(
+                    redis_client=redis_client,
+                    key_prefix=redis_config.get("key_prefix", "ksagent:memory:"),
+                    ttl=redis_config.get("ttl", 2592000),  # 30 天
+                )
+                logger.info("[Memory] 使用 Redis 持久化存储（重启后记忆保留）")
+                return _checkpointer
+
+            except Exception as e:
+                logger.warning(f"[Memory] Redis 连接失败，降级到 MemorySaver: {e}")
+
+        # 降级到 MemorySaver
         _checkpointer = MemorySaver()
-        logger.info("[Memory] 短期记忆 checkpointer 已初始化（MemorySaver，进程内）")
+        logger.info("[Memory] 使用 MemorySaver（进程内存，重启清空）")
+
     return _checkpointer
 
 
@@ -153,3 +194,151 @@ def history_prompt_block(messages: List[BaseMessage]) -> str:
 def count_turns(messages: List[BaseMessage]) -> int:
     """统计已完成的对话轮数（以 AI 回复条数计，一问一答=1 轮）。"""
     return sum(1 for m in (messages or []) if isinstance(m, AIMessage))
+
+
+# ===================== 智能摘要（替代硬截断） =====================
+
+async def _summarize_history_async(messages: List[BaseMessage], max_summary_length: int = 200) -> str:
+    """用 LLM 将历史对话压缩成摘要（保留关键上下文）
+
+    Args:
+        messages: 需要摘要的历史消息
+        max_summary_length: 摘要最大长度
+
+    Returns:
+        摘要文本
+    """
+    if not messages:
+        return ""
+
+    # 构建摘要提示词
+    history_text = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            role = "用户"
+        elif isinstance(msg, AIMessage):
+            role = "助手"
+        else:
+            continue
+        text = _msg_text(msg)
+        if text:
+            history_text.append(f"{role}：{text[:200]}")
+
+    if not history_text:
+        return ""
+
+    history_str = "\n".join(history_text)
+
+    # 使用 LLM 生成摘要
+    try:
+        from utils.llm_pool import get_llm
+
+        llm = get_llm(role="summarizer", temperature=0.1)
+
+        prompt = f"""请将以下对话历史压缩成简洁的摘要（不超过{max_summary_length}字），保留关键信息：
+
+{history_str}
+
+要求：
+1. 提取用户的核心需求和关键约束条件
+2. 保留重要的查询参数（如时间范围、告警类型等）
+3. 忽略闲聊和重复内容
+4. 用第三人称客观描述
+
+摘要："""
+
+        from langchain_core.messages import HumanMessage as LCHumanMessage
+        response = await llm.ainvoke([LCHumanMessage(content=prompt)])
+        summary = response.content.strip()
+
+        logger.info(f"[Memory] 历史摘要生成：{len(history_text)} 条消息 → {len(summary)} 字")
+        return summary
+
+    except Exception as e:
+        logger.warning(f"[Memory] 历史摘要失败，使用硬截断: {e}")
+        # 降级：返回简单拼接
+        return "（早期对话）" + " / ".join(history_text[:3])
+
+
+def build_history_context_with_summary(
+    messages: List[BaseMessage],
+    *,
+    exclude_last_human: bool = True,
+    use_summary: bool = True
+) -> str:
+    """构建历史上下文，支持智能摘要
+
+    Args:
+        messages: state['messages']
+        exclude_last_human: 是否排除最后一条用户消息
+        use_summary: 是否启用智能摘要（超长时自动触发）
+
+    Returns:
+        历史上下文文本
+    """
+    msgs = list(messages or [])
+    if exclude_last_human and msgs and isinstance(msgs[-1], HumanMessage):
+        msgs = msgs[:-1]
+    if not msgs:
+        return ""
+
+    # 判断是否需要摘要
+    total_chars = sum(len(_msg_text(m)) for m in msgs)
+    need_summary = use_summary and total_chars > MAX_HISTORY_CHARS * 2
+
+    if need_summary and len(msgs) > MAX_HISTORY_TURNS * 2:
+        # 历史过长，分为两部分：
+        # 1. 早期部分：生成摘要
+        # 2. 最近部分：保留原文
+        split_point = len(msgs) - (MAX_HISTORY_TURNS * 2)
+        early_msgs = msgs[:split_point]
+        recent_msgs = msgs[split_point:]
+
+        # 注意：这里是同步函数，但 LLM 调用是异步的
+        # 实际使用时，应该在异步上下文中调用或缓存摘要结果
+        # 为了简化，这里先使用硬截断，摘要功能作为可选增强
+
+        logger.info(
+            f"[Memory] 历史过长（{len(msgs)} 条消息，{total_chars} 字），"
+            f"使用滑动窗口（保留最近 {len(recent_msgs)} 条）"
+        )
+
+        # TODO: 集成异步摘要（需要在 planner_node 等异步上下文中调用）
+        # summary = await _summarize_history_async(early_msgs)
+        # 当前降级方案：只保留最近的消息
+        msgs = recent_msgs
+
+    # 使用原有逻辑构建上下文
+    return _build_context_from_messages(msgs)
+
+
+def _build_context_from_messages(msgs: List[BaseMessage]) -> str:
+    """从消息列表构建上下文文本（内部辅助函数）"""
+    # 滑动窗口：最近 N 轮 ≈ 最近 2N 条消息
+    msgs = msgs[-(MAX_HISTORY_TURNS * 2):]
+
+    # 逐条渲染（从新到旧累加，受总字符上限约束），最后反转回时间正序
+    rendered: list[str] = []
+    total = 0
+    for msg in reversed(msgs):
+        if isinstance(msg, HumanMessage):
+            role = "用户"
+        elif isinstance(msg, AIMessage):
+            role = "助手"
+        else:
+            continue
+        text = _msg_text(msg)
+        if not text:
+            continue
+        if len(text) > PER_MESSAGE_CHARS:
+            text = text[:PER_MESSAGE_CHARS] + "…（略）"
+        line = f"{role}：{text}"
+        if total + len(line) > MAX_HISTORY_CHARS:
+            break
+        rendered.append(line)
+        total += len(line)
+
+    if not rendered:
+        return ""
+    rendered.reverse()
+    return "\n".join(rendered)

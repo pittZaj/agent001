@@ -88,37 +88,35 @@ async def aggregate_alarms_impl(args: dict, context: dict) -> dict:
     if lv := args.get("level"):
         base_args["level"] = lv
 
-    # 自动分页拉取全量数据（在同一事件循环内完成所有分页，避免统计采样不全）
-    # 之前单页 pagesize=10000，当 total > 10000 时只统计了首页，导致"10529 条只统计 10000 条"
+    # 自动分页拉取全量数据（并发翻页优化）
+    # 使用通用并发翻页模块，替代串行拉取
     PAGE_SIZE = 10000
     MAX_PAGES = 100  # 上限保护：100 * 10000 = 100 万条
-    events: list[dict] = []
-    total = 0
-    pageno = 1
-    while pageno <= MAX_PAGES:
-        page_args = dict(base_args)
-        page_args["pageno"] = pageno
-        page_args["pagesize"] = PAGE_SIZE
-        result = await registry.invoke("ai_event_list", page_args, context)
-        if result.get("error"):
-            # 首页就失败则直接返回错误；后续页失败则保留已拉取数据
-            if pageno == 1:
-                return {"error": result["error"]}
-            logger.warning(f"[aggregate_alarms] 第 {pageno} 页拉取失败，停止分页，已拉取 {len(events)} 条")
-            break
 
-        page_events = result.get("events", []) or []
-        total = result.get("total", len(page_events))
-        events.extend(page_events)
+    # 先拉取第一页
+    page_args = dict(base_args)
+    page_args["pageno"] = 1
+    page_args["pagesize"] = PAGE_SIZE
+    first_result = await registry.invoke("ai_event_list", page_args, context)
 
-        if len(events) >= total or len(page_events) < PAGE_SIZE:
-            break
-        pageno += 1
+    if first_result.get("error"):
+        return {"error": first_result["error"]}
 
-    if len(events) < total:
-        logger.warning(f"[aggregate_alarms] 分页拉取 {len(events)}/{total} 条（未拉满，可能触发 MAX_PAGES 上限）")
-    else:
-        logger.info(f"[aggregate_alarms] 分页拉取完成，共 {len(events)}/{total} 条")
+    # 并发拉取全量（复用公共函数）
+    from graph.pagination import fetch_all_events_concurrent
+    full_result = await fetch_all_events_concurrent(
+        invoke_func=registry.invoke,
+        tool_name="ai_event_list",
+        base_args=base_args,
+        context=context,
+        first_result=first_result,
+        pagesize=PAGE_SIZE,
+        max_pages=MAX_PAGES,
+        max_concurrency=5,
+    )
+
+    events = full_result.get("events", [])
+    total = full_result.get("total", 0)
 
     counts: dict[str, int] = {}
     for e in events:
