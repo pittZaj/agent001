@@ -102,21 +102,74 @@ def stream_llm(llm, messages) -> str:
 
 # 工具名 → 友好中文进度文案（status 事件用）
 TOOL_LABELS: Dict[str, str] = {
+    # === AI 视觉告警 (ai_*) ===
     "ai_event_list": "查询平台 AI 告警",
     "ai_event_detail": "获取告警详情",
     "ai_event_deal": "回写告警状态",
+    "ai_event_notify_users": "查询告警通知用户",
+
+    # === 视频设备与录像 (video_*) ===
+    "video_device_list": "查询视频设备",
+    "video_device_detail": "获取设备详情",
+    "video_resolve_camera_channel": "解析摄像机通道",
+    "video_record_find_segments": "查询录像片段",
+    "video_record_start_playback": "启动录像回放",
+    "video_live_play_urls": "获取实时播放地址",
+
+    # === 系统管理 (system_*) ===
+    "system_alarm_list": "查询系统告警",
+    "system_alarm_resolve": "解决系统告警",
+    "system_user_list": "查询系统用户",
+    "system_role_list": "查询系统角色",
+    "system_role_camera_permission": "查询角色摄像机权限",
+    "system_role_menu_permission": "查询角色菜单权限",
+    "system_role_operation_permission": "查询角色操作权限",
+    "system_menus": "查询菜单树",
+    "system_config_get": "获取系统配置",
+
+    # === 本地分析工具 (TOOL) ===
     "aggregate_alarms": "聚合统计告警",
     "visualize_alarms": "生成可视化图表",
-    "vlm_judge_alarm": "VLM 复判告警",
     "update_alarm_status": "回写复核状态",
     "fetch_alarm_context": "回溯录像上下文",
+
+    # === 复杂子图 (SUBGRAPH) ===
+    "vlm_judge_alarm": "VLM 复判告警",
     "kb_regulation": "检索规章制度知识库",
-    "video_device_list": "查询视频设备",
+
+    # === 基础 ===
     "direct_response": "组织回复",
 }
 
+# 启动期自检标志（避免重复检查）
+_label_check_done = False
+
 
 def tool_label(tool: str) -> str:
+    """返回工具的中文进度文案，未覆盖的返回原 id 并打 warning（仅首次）"""
+    global _label_check_done
+
+    # 首次调用时做一次性自检（检查是否有未覆盖的工具）
+    if not _label_check_done:
+        _label_check_done = True
+        try:
+            from skills import get_skill_registry
+            registry = get_skill_registry()
+            all_skills = registry.list_skills()
+            all_ids = {s.id for s in all_skills}
+            labeled_ids = set(TOOL_LABELS.keys())
+            missing = all_ids - labeled_ids
+
+            if missing:
+                from loguru import logger
+                logger.warning(
+                    f"[streaming] TOOL_LABELS 缺失 {len(missing)} 个工具的中文文案: "
+                    f"{', '.join(sorted(missing)[:5])}{'...' if len(missing) > 5 else ''}"
+                )
+        except Exception:
+            # 初始化阶段可能 registry 还未就绪，静默跳过
+            pass
+
     return TOOL_LABELS.get(tool, tool)
 
 
