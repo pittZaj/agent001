@@ -267,6 +267,90 @@ async def judge(request: JudgeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ===================== 会话管理（Redis 短期记忆）=====================
+class SessionCreateRequest(BaseModel):
+    user_id: str = "default"
+    title: str | None = None
+
+
+class SessionRenameRequest(BaseModel):
+    title: str
+
+
+@app.get("/api/v1/sessions")
+async def list_sessions(user_id: str = "default"):
+    """列出用户的所有会话（thread_id 前缀 sess_{user_id}_）。"""
+    from graph.session_manager import get_session_manager
+
+    mgr = get_session_manager()
+    rows = mgr.list_sessions_for_user(user_id)
+    sessions = [
+        {
+            "session_id": row.get("thread_id"),
+            "title": row.get("name") or "新会话",
+            "message_count": row.get("message_count", 0),
+            "turn_count": row.get("turn_count", 0),
+            "last_update": row.get("last_update"),
+        }
+        for row in rows
+        if row.get("thread_id")
+    ]
+    return {"sessions": sessions}
+
+
+@app.post("/api/v1/sessions")
+async def create_session(request: SessionCreateRequest):
+    """创建新会话（生成 session_id，可选预设标题）。"""
+    from graph.session_manager import get_session_manager
+
+    mgr = get_session_manager()
+    session_id = mgr.new_thread_id(request.user_id)
+    title = (request.title or "").strip() or "新会话"
+    mgr.rename_session(session_id, title)
+    return {"session_id": session_id, "title": title, "messages": []}
+
+
+@app.get("/api/v1/sessions/{session_id}")
+async def get_session(session_id: str):
+    """获取会话详情与消息历史。"""
+    from graph.session_manager import get_session_manager
+
+    mgr = get_session_manager()
+    meta = mgr.get_session_stats(session_id)
+    messages = mgr.get_session_messages(session_id)
+    title = (meta or {}).get("name") or "新会话"
+    return {
+        "session_id": session_id,
+        "title": title,
+        "message_count": (meta or {}).get("message_count", len(messages)),
+        "turn_count": (meta or {}).get("turn_count", 0),
+        "messages": messages,
+    }
+
+
+@app.put("/api/v1/sessions/{session_id}")
+async def rename_session(session_id: str, request: SessionRenameRequest):
+    from graph.session_manager import get_session_manager
+
+    title = (request.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title 不能为空")
+    ok = get_session_manager().rename_session(session_id, title)
+    if not ok:
+        raise HTTPException(status_code=500, detail="重命名失败")
+    return {"session_id": session_id, "title": title}
+
+
+@app.delete("/api/v1/sessions/{session_id}")
+async def delete_session(session_id: str):
+    from graph.session_manager import get_session_manager
+
+    ok = get_session_manager().delete_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="会话不存在或删除失败")
+    return {"session_id": session_id, "deleted": True}
+
+
 # ===================== 入口 =====================
 def main():
     import uvicorn

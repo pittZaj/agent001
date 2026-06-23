@@ -206,6 +206,43 @@ class SessionManager:
         """
         return self._get_session_metadata(thread_id)
 
+    def get_session_messages(self, thread_id: str) -> List[Dict[str, str]]:
+        """获取会话消息列表（user/assistant 文本）。"""
+        try:
+            config = {"configurable": {"thread_id": thread_id}}
+            checkpoint = self.checkpointer.get(config)
+            if not checkpoint:
+                return []
+
+            messages = checkpoint.get("channel_values", {}).get("messages", [])
+            history: List[Dict[str, str]] = []
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    text = _msg_text(msg)
+                    if text:
+                        history.append({"role": "user", "content": text})
+                elif isinstance(msg, AIMessage):
+                    text = str(msg.content or "").strip()
+                    if text:
+                        history.append({"role": "assistant", "content": text})
+            return history
+        except Exception as e:
+            logger.error(f"[SessionManager] 获取会话消息失败: {e}")
+            return []
+
+    def list_sessions_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """按用户前缀过滤会话列表（sess_{user_id}_）。"""
+        prefix = f"sess_{user_id}_"
+        sessions = self.list_sessions()
+        return [s for s in sessions if str(s.get("thread_id", "")).startswith(prefix)]
+
+    @staticmethod
+    def new_thread_id(user_id: str) -> str:
+        import uuid
+
+        safe_user = (user_id or "default").strip() or "default"
+        return f"sess_{safe_user}_{uuid.uuid4().hex[:12]}"
+
     # ===================== 内部辅助方法 =====================
 
     def _get_session_metadata(self, thread_id: str) -> Optional[Dict[str, Any]]:
