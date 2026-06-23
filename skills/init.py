@@ -18,6 +18,10 @@ def register_local_skills(registry):
     def direct_response_impl(args: dict, context: dict) -> dict:
         return {"text": args.get("text", ""), "error": None}
 
+    def stream_chat_impl(args: dict, context: dict) -> dict:
+        """占位：实际回复由 formatter 调用 stream_llm 流式生成。"""
+        return {"stream": True, "error": None}
+
     registry.register(Skill(
         id="direct_response",
         name="直接回复",
@@ -32,6 +36,19 @@ def register_local_skills(registry):
         implementation=direct_response_impl,
         skill_type=SkillType.TOOL,
         tags=["basic"]
+    ))
+
+    registry.register(Skill(
+        id="stream_chat",
+        name="流式对话",
+        description="无需外部工具，由系统根据用户问题流式生成自然语言回答（args 留空）",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        implementation=stream_chat_impl,
+        skill_type=SkillType.TOOL,
+        tags=["basic", "chat"]
     ))
 
     logger.info("本地基础 Skills 注册完成")

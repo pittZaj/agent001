@@ -9,7 +9,7 @@ from loguru import logger
 from graph.state import AgentState
 from utils import CONFIG
 from skills import get_skill_registry
-from graph.streaming import emit_status, stream_llm, tool_label
+from graph.streaming import emit_status, stream_llm, tool_label, emit_token_chunked
 from graph.memory import history_prompt_block
 
 
@@ -158,7 +158,8 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 - 查规章制度/处罚标准 → 用 `kb_regulation`
 - 查录像片段：用 `fetch_alarm_context`（输入 alarm_uuid，自动解析摄像头与时间窗）
 - 查 AI 摄像机/视频设备列表 → 用 `video_device_list`，**不要**用 system_role_camera_permission（那是按角色查权限）
-- 仅闲聊或无法用工具完成 → 用 `direct_response`
+- 仅闲聊、常识问答、介绍平台能力等**无需查库/调工具**的问题 → 用 `stream_chat`（args 必须为 `{{}}`，**禁止**写 text，由系统流式生成）
+- 需要返回**固定提示语**（如平台不支持某告警类型）→ 用 `direct_response` 并在 args.text 中写完整文案
 
 # 真实平台关键字段（与旧版有差异，务必对齐）
 - AI 事件主键：`uuid`（不是 alarm_uuid）→ ai_event_* 工具入参用 `event_uuid`
@@ -201,7 +202,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 # 约束
 1. 只能使用上述列出的工具，不要编造
 2. 参数名必须严格匹配工具 schema（如 ai_event_* 用 event_uuid，不是 alarm_uuid）
-3. 无法完成时返回 `[{{"task":"direct_response","args":{{"text":"..."}}}}]`
+3. 无法完成且需要固定文案时返回 `[{{"task":"direct_response","args":{{"text":"..."}}}}]`；闲聊/常识问答返回 `[{{"task":"stream_chat","args":{{}}}}]`
 """
 
     messages = [
@@ -230,7 +231,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             plan = json.loads(json_match.group())
             logger.info(f"[Planner] 生成计划: {plan}")
             _tasks = [t.get("task", "") for t in plan]
-            if _tasks and _tasks != ["direct_response"]:
+            if _tasks and _tasks != ["direct_response"] and _tasks != ["stream_chat"]:
                 emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
                             + "、".join(tool_label(t) for t in _tasks))
             return {
@@ -314,7 +315,7 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
 
     task = plan[idx]
     logger.info(f"[Executor] 执行任务 {idx + 1}/{len(plan)}: {task['task']}")
-    if task["task"] != "direct_response":
+    if task["task"] not in ("direct_response", "stream_chat"):
         emit_status(
             "executing",
             "正在执行步骤 " + str(idx + 1) + "/" + str(len(plan))
@@ -973,14 +974,41 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     if not tool_results:
         return {"final_response": "无结果"}
 
-    # 如果只有 direct_response，直接返回
+    # 纯对话：由 LLM 流式生成（简单问答、闲聊等）
+    if (len(tool_results) == 1
+            and tool_results[0].get("success")
+            and tool_results[0].get("tool") == "stream_chat"):
+        from utils.llm_pool import get_llm
+        llm = get_llm(role="formatter", temperature=0.5)
+        system_prompt = (
+            "你是 KSIpms 综合管理平台的智能助手。"
+            "请用简洁、准确、友好的中文回答用户问题。"
+            "可介绍平台能力：查询 AI 告警、统计分析、规章制度检索、图像分析等。"
+            "不要编造平台数据；若需查具体数据，提示用户使用明确的查询指令。"
+        )
+        user_prompt = user_message
+        history_block = history_prompt_block(state.get("messages", []))
+        if history_block:
+            user_prompt = history_block + "\n# 本轮用户问题\n" + user_message
+        emit_status("answering", "正在组织回答…")
+        try:
+            final_response = stream_llm(llm, [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ])
+        except Exception as e:
+            logger.error(f"[Formatter] stream_chat 失败: {e}")
+            final_response = "抱歉，暂时无法回答，请稍后重试。"
+            emit_token_chunked(final_response)
+        return {"final_response": final_response}
+
+    # 固定文案 direct_response（预路由闲聊、平台不支持某类型等）
     if (len(tool_results) == 1
             and tool_results[0].get("success")
             and tool_results[0].get("tool") == "direct_response"):
         _text = tool_results[0]["result"].get("text", "")
         emit_status("answering", "正在组织回答…")
-        from graph.streaming import emit_token as _emit_token
-        _emit_token(_text)  # direct_response 文本一次性下发（无 LLM 可逐字）
+        emit_token_chunked(_text)
         return {"final_response": _text}
 
     # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
@@ -1018,15 +1046,21 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
                 detail = ("平台**支持**「" + type_label + "」这类算法识别，"
                           "但数据库中当前**暂无**该类型的告警记录。")
             logger.info(f"[Formatter] ai_event_list 空结果：支持但无数据 event_type={et} time={has_time}")
-            return {"final_response":
-                    f"未查询到「{type_label}」（{et}）的告警记录{cond_desc}，共 **0 条**。\n\n"
-                    f"{detail}"}
+            _text = (
+                f"未查询到「{type_label}」（{et}）的告警记录{cond_desc}，共 **0 条**。\n\n"
+                f"{detail}"
+            )
+            emit_token_chunked(_text)
+            return {"final_response": _text}
 
         cond = "（无筛选条件，已查全量）" if not filt else "（筛选条件：" + ", ".join(f"{k}={v}" for k, v in filt.items()) + "）"
         logger.info(f"[Formatter] ai_event_list 返回空结果，输出无数据提示 {cond}")
-        return {"final_response":
-                f"未在平台中查询到符合条件的 AI 告警{cond}，共 **0 条**。\n\n"
-                f"该筛选条件下平台暂无告警记录，请确认筛选条件是否符合预期。"}
+        _text = (
+            f"未在平台中查询到符合条件的 AI 告警{cond}，共 **0 条**。\n\n"
+            f"该筛选条件下平台暂无告警记录，请确认筛选条件是否符合预期。"
+        )
+        emit_token_chunked(_text)
+        return {"final_response": _text}
 
     # 构造工具结果摘要
     summary_parts = []
@@ -1072,7 +1106,11 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
             f"aggregate={has_aggregate}, summary_len={len(tools_summary)})"
         )
         emit_status("summarizing", "正在统计分析并生成图表…")
-        return _generate_summary_response(user_message, tool_results)
+        summary_out = _generate_summary_response(user_message, tool_results)
+        _text = summary_out.get("final_response", "")
+        if _text:
+            emit_token_chunked(_text, chunk_size=8)
+        return summary_out
 
     # 用 LLM 生成自然语言回答（使用客户端单例）
     from utils.llm_pool import get_llm

@@ -85,6 +85,14 @@ if [ "$OK" = "1" ]; then
     echo "   健康检查: $(curl -s -m 3 http://127.0.0.1:$PORT/health)"
     echo "   对接地址: http://$(hostname -I | awk '{print $1}'):$PORT"
     echo "   接口:     POST /api/v1/chat"
+    echo "   会话:     GET/POST /api/v1/sessions（小可多会话，需 main.py 含会话路由）"
+    if curl -s -m 3 -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:$PORT/api/v1/sessions" \
+        -H "Content-Type: application/json" \
+        -d '{"user_id":"healthcheck","title":"probe"}' 2>/dev/null | grep -qE '^(200|201)$'; then
+        echo "   会话 API: ✅ POST /api/v1/sessions 可用"
+    else
+        echo "   会话 API: ⚠️ POST /api/v1/sessions 不可用（请确认 main.py 已更新并重启）"
+    fi
 else
     echo "   ⚠️ 60 秒内未就绪，请查看日志排查："
     echo "   tail -50 $LOG"

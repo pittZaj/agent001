@@ -80,23 +80,40 @@ def emit_token(text: str) -> None:
         em.emit("token", {"text": text})
 
 
-def stream_llm(llm, messages) -> str:
+def emit_token_chunked(text: str, chunk_size: int = 2) -> None:
+    """将已生成的完整文本分块下发 token（用于 direct_response / 报告拼接等无 LLM 流式路径）。"""
+    if not text:
+        return
+    if _current_emitter.get() is None:
+        return
+    step = max(1, chunk_size)
+    for i in range(0, len(text), step):
+        emit_token(text[i : i + step])
+
+
+def stream_llm(llm, messages, *, max_emit_piece: int = 8) -> str:
     """统一的"答案 LLM"调用：流式拿 token 并逐字 emit，返回拼接后的完整文本。
 
     - 流式请求：每个 chunk 即时 emit_token，前端逐字显示；
     - 非流式请求：emitter 为空，emit_token 静默，等价于一次性 invoke 后返回全文。
-    这样节点代码只此一处，无需区分流式/非流式两套分支。
+    - vLLM 若单次返回大块文本，会再切分为 max_emit_piece 字符逐步 emit。
     """
     parts: list[str] = []
+    step = max(1, max_emit_piece)
     for chunk in llm.stream(messages):
         piece = getattr(chunk, "content", "") or ""
         if isinstance(piece, list):  # 兼容多模态分块返回（取文本片段）
             piece = "".join(
                 seg.get("text", "") if isinstance(seg, dict) else str(seg) for seg in piece
             )
-        if piece:
-            parts.append(piece)
+        if not piece:
+            continue
+        parts.append(piece)
+        if len(piece) <= step:
             emit_token(piece)
+        else:
+            for i in range(0, len(piece), step):
+                emit_token(piece[i : i + step])
     return "".join(parts)
 
 
@@ -139,6 +156,7 @@ TOOL_LABELS: Dict[str, str] = {
 
     # === 基础 ===
     "direct_response": "组织回复",
+    "stream_chat": "流式对话",
 }
 
 # 启动期自检标志（避免重复检查）
