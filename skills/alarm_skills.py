@@ -33,6 +33,8 @@ from skills.base import Skill, SkillType
 
 
 # ------------------ 中文字体（保留原逻辑） ------------------
+# 字体探测仅在模块导入时执行一次（非每次绘图），开销可忽略。
+# 遍历候选字体路径，找到第一个可用的即 break（已最优化，无需改为惰性加载）。
 _CJK_FONT_CANDIDATES = [
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",

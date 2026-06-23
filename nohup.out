@@ -1,0 +1,61 @@
+=== Gradio Web 控制台重启 ===
+
+1. 停止所有旧 Web 进程...
+   等待端口 7860 释放...
+   ✅ 端口 7860 已释放
+
+2. 激活 conda 环境...
+/root/anaconda3/lib/python3.12/site-packages/conda/base/context.py:201: FutureWarning: Adding 'defaults' to channel list implicitly is deprecated and will be removed in 25.3. 
+
+To remove this warning, please choose a default channel explicitly with conda's regular configuration system, e.g. by adding 'defaults' to the list of channels:
+
+  conda config --add channels defaults
+
+For more information see https://docs.conda.io/projects/conda/en/stable/user-guide/configuration/use-condarc.html
+
+  deprecated.topic(
+   ✅ 环境已激活: agent
+
+3. 验证关键依赖...
+   sentence-transformers: 3.4.1
+   torch: 2.8.0
+   transformers: 4.57.6
+
+4. 启动 Gradio Web 控制台...
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:423: DeprecationWarning: The 'theme' parameter in the Blocks constructor will be removed in Gradio 6.0. You will need to pass 'theme' to Blocks.launch() instead.
+  with gr.Blocks(title="Agent-of-Agent 控制台", theme=gr.themes.Soft()) as demo:
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:667: DeprecationWarning: The 'show_copy_button' parameter will be removed in Gradio 6.0. You will need to use 'buttons=["copy"]' instead.
+  chatbot = gr.Chatbot(
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:667: DeprecationWarning: The default value of 'allow_tags' in gr.Chatbot will be changed from False to True in Gradio 6.0. You will need to explicitly set allow_tags=False if you want to disable tags in your chatbot.
+  chatbot = gr.Chatbot(
+=== Gradio Web 控制台重启 ===
+
+1. 停止所有旧 Web 进程...
+Terminated
+   等待端口 7860 释放...
+   ✅ 端口 7860 已释放
+
+2. 激活 conda 环境...
+/root/anaconda3/lib/python3.12/site-packages/conda/base/context.py:201: FutureWarning: Adding 'defaults' to channel list implicitly is deprecated and will be removed in 25.3. 
+
+To remove this warning, please choose a default channel explicitly with conda's regular configuration system, e.g. by adding 'defaults' to the list of channels:
+
+  conda config --add channels defaults
+
+For more information see https://docs.conda.io/projects/conda/en/stable/user-guide/configuration/use-condarc.html
+
+  deprecated.topic(
+   ✅ 环境已激活: agent
+
+3. 验证关键依赖...
+   sentence-transformers: 3.4.1
+   torch: 2.8.0
+   transformers: 4.57.6
+
+4. 启动 Gradio Web 控制台...
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:423: DeprecationWarning: The 'theme' parameter in the Blocks constructor will be removed in Gradio 6.0. You will need to pass 'theme' to Blocks.launch() instead.
+  with gr.Blocks(title="Agent-of-Agent 控制台", theme=gr.themes.Soft()) as demo:
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:667: DeprecationWarning: The 'show_copy_button' parameter will be removed in Gradio 6.0. You will need to use 'buttons=["copy"]' instead.
+  chatbot = gr.Chatbot(
+/mnt/data3/clip/LangGraph/agent/agent/web/app.py:667: DeprecationWarning: The default value of 'allow_tags' in gr.Chatbot will be changed from False to True in Gradio 6.0. You will need to explicitly set allow_tags=False if you want to disable tags in your chatbot.
+  chatbot = gr.Chatbot(

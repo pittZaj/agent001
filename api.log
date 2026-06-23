@@ -1,69 +1,115 @@
-2026-06-16 09:50:38.206 | INFO     | utils:load_config:17 - 配置已加载: /mnt/data3/clip/LangGraph/agent/config.yaml
-INFO:     Started server process [1942112]
+2026-06-23 15:00:51.997 | INFO     | utils:load_config:17 - 配置已加载: /mnt/data3/clip/LangGraph/agent/config.yaml
+INFO:     Started server process [2707480]
 INFO:     Waiting for application startup.
-2026-06-16 09:50:39.031 | INFO     | main:lifespan:42 - ============================================================
-2026-06-16 09:50:39.032 | INFO     | main:lifespan:43 - 🚀 KSAgent 启动中...
-2026-06-16 09:50:39.032 | INFO     | main:lifespan:44 -    LLM 后端: http://127.0.0.1:8004/v1
-2026-06-16 09:50:39.032 | INFO     | main:lifespan:45 -    模型名称: Qwen3-VL-4B-Instruct-FP8
-2026-06-16 09:50:39.032 | INFO     | main:lifespan:46 -    MCP 启用: True
-2026-06-16 09:50:39.032 | INFO     | main:lifespan:47 - ============================================================
-2026-06-16 09:50:39.032 | INFO     | skills.init:init_skill_registry:50 - 初始化 Skill Registry（真实平台对接）...
-2026-06-16 09:50:39.032 | INFO     | skills.registry:register:29 - 注册 Skill: direct_response (tool)
-2026-06-16 09:50:39.032 | INFO     | skills.init:register_local_skills:37 - 本地基础 Skills 注册完成
-2026-06-16 09:50:39.398 | INFO     | mcp_adapter.client:connect_http_server:83 - [http] 连接 MCP server: ksipms -> http://192.168.1.199:6620/mcp
-2026-06-16 09:50:39.459 | INFO     | mcp_adapter.client:connect_http_server:104 - [http] MCP server ksipms 已连接 (serverInfo=ksipms v1.0.0)
-2026-06-16 09:50:39.459 | INFO     | skills.mcp_skills:register_mcp_skills:27 - 开始注册 MCP Skills...
-2026-06-16 09:50:39.467 | INFO     | skills.mcp_skills:register_mcp_skills:33 - 发现 19 个 MCP 工具 from ksipms
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_deal (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_detail (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_list (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_notify_users (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: system_alarm_list (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: system_alarm_resolve (mcp_tool)
-2026-06-16 09:50:39.467 | INFO     | skills.registry:register:29 - 注册 Skill: system_config_get (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_menus (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_camera_permission (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_list (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_menu_permission (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_operation_permission (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: system_user_list (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_device_detail (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_device_list (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_live_play_urls (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_record_find_segments (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_record_start_playback (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: video_resolve_camera_channel (mcp_tool)
-2026-06-16 09:50:39.468 | INFO     | skills.mcp_skills:register_mcp_skills:52 - MCP Skills 注册完成，共 19 个工具
-2026-06-16 09:50:39.468 | INFO     | skills.registry:register:29 - 注册 Skill: vlm_judge_alarm (subgraph)
-2026-06-16 09:50:39.468 | INFO     | skills.vlm_judge_subgraph:register_vlm_judge_skill:163 - 复判子图 Skill 已注册（真实平台版）: vlm_judge_alarm
-2026-06-16 09:50:40.077 | INFO     | skills.alarm_skills:<module>:48 - [viz] 使用中文字体: Noto Sans CJK JP
-2026-06-16 09:50:40.077 | INFO     | skills.registry:register:29 - 注册 Skill: aggregate_alarms (tool)
-2026-06-16 09:50:40.077 | INFO     | skills.registry:register:29 - 注册 Skill: visualize_alarms (tool)
-2026-06-16 09:50:40.077 | INFO     | skills.registry:register:29 - 注册 Skill: fetch_alarm_context (tool)
-2026-06-16 09:50:40.077 | INFO     | skills.registry:register:29 - 注册 Skill: update_alarm_status (tool)
-2026-06-16 09:50:40.077 | INFO     | skills.alarm_skills:register_alarm_skills:404 - 告警业务 Skills 已注册（真实平台版）: aggregate_alarms, visualize_alarms, fetch_alarm_context, update_alarm_status
-2026-06-16 09:50:40.079 | INFO     | skills.registry:register:29 - 注册 Skill: kb_regulation (tool)
-2026-06-16 09:50:40.079 | INFO     | skills.kb.skill:register_kb_skill:116 - 注册 Skill: kb_regulation
-2026-06-16 09:50:40.079 | INFO     | skills.init:init_skill_registry:84 - Skill Registry 初始化完成，共 26 个 Skill (分布: {'tool': 6, 'mcp_tool': 19, 'subgraph': 1})
-2026-06-16 09:50:40.079 | INFO     | main:lifespan:52 - Skill Registry 已就绪
-2026-06-16 09:50:40.082 | INFO     | graph.graph:build_graph:54 - LangGraph 图构建完成（含多模态分支）
-2026-06-16 09:50:40.082 | INFO     | main:lifespan:56 - LangGraph 图已就绪
-2026-06-16 09:50:40.087 | INFO     | main:_mount_generated_agents:115 - 挂载已发布 Agent: alarm_query_agent -> /agents/alarm_query_agent/chat
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:44 - ============================================================
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:45 - 🚀 KSAgent 启动中...
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:46 -    LLM 后端: http://127.0.0.1:8004/v1
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:47 -    模型名称: Qwen3-VL-4B-Instruct-FP8
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:48 -    MCP 启用: True
+2026-06-23 15:00:52.912 | INFO     | main:lifespan:49 - ============================================================
+2026-06-23 15:00:52.913 | INFO     | utils.async_loop:get_background_loop:54 - [async_loop] 后台事件循环已启动 (thread=ksagent-mcp-loop)
+2026-06-23 15:00:52.913 | INFO     | skills.init:init_skill_registry:50 - 初始化 Skill Registry（真实平台对接）...
+2026-06-23 15:00:52.913 | INFO     | skills.registry:register:29 - 注册 Skill: direct_response (tool)
+2026-06-23 15:00:52.914 | INFO     | skills.init:register_local_skills:37 - 本地基础 Skills 注册完成
+2026-06-23 15:00:53.214 | DEBUG    | mcp_adapter.client:get_mcp_client:219 - [MCP] get_mcp_client 调用 (thread=ksagent-mcp-loop, cached=False, force_reconnect=False)
+2026-06-23 15:00:53.214 | INFO     | mcp_adapter.client:get_mcp_client:244 - [MCP] 创建新连接 (thread=ksagent-mcp-loop)
+2026-06-23 15:00:53.214 | INFO     | mcp_adapter.client:connect_http_server:83 - [http] 连接 MCP server: ksipms -> http://192.168.1.199:6620/mcp
+2026-06-23 15:00:53.267 | INFO     | mcp_adapter.client:connect_http_server:104 - [http] MCP server ksipms 已连接 (serverInfo=ksipms v1.0.0)
+2026-06-23 15:00:53.267 | INFO     | mcp_adapter.client:get_mcp_client:262 - [MCP] HTTP 连接已建立 (thread=ksagent-mcp-loop, endpoint=http://192.168.1.199:6620/mcp)
+2026-06-23 15:00:53.268 | INFO     | skills.mcp_skills:register_mcp_skills:27 - 开始注册 MCP Skills...
+2026-06-23 15:00:53.274 | INFO     | skills.mcp_skills:register_mcp_skills:33 - 发现 19 个 MCP 工具 from ksipms
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_deal (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_detail (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_list (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: ai_event_notify_users (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_alarm_list (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_alarm_resolve (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_config_get (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_menus (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_camera_permission (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_list (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_menu_permission (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_role_operation_permission (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: system_user_list (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_device_detail (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_device_list (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_live_play_urls (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_record_find_segments (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_record_start_playback (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.registry:register:29 - 注册 Skill: video_resolve_camera_channel (mcp_tool)
+2026-06-23 15:00:53.275 | INFO     | skills.mcp_skills:register_mcp_skills:52 - MCP Skills 注册完成，共 19 个工具
+2026-06-23 15:00:53.276 | INFO     | skills.registry:register:29 - 注册 Skill: vlm_judge_alarm (subgraph)
+2026-06-23 15:00:53.276 | INFO     | skills.vlm_judge_subgraph:register_vlm_judge_skill:163 - 复判子图 Skill 已注册（真实平台版）: vlm_judge_alarm
+2026-06-23 15:00:53.789 | INFO     | skills.alarm_skills:<module>:48 - [viz] 使用中文字体: Noto Sans CJK JP
+2026-06-23 15:00:53.789 | INFO     | skills.registry:register:29 - 注册 Skill: aggregate_alarms (tool)
+2026-06-23 15:00:53.789 | INFO     | skills.registry:register:29 - 注册 Skill: visualize_alarms (tool)
+2026-06-23 15:00:53.789 | INFO     | skills.registry:register:29 - 注册 Skill: fetch_alarm_context (tool)
+2026-06-23 15:00:53.789 | INFO     | skills.registry:register:29 - 注册 Skill: update_alarm_status (tool)
+2026-06-23 15:00:53.789 | INFO     | skills.alarm_skills:register_alarm_skills:402 - 告警业务 Skills 已注册（真实平台版）: aggregate_alarms, visualize_alarms, fetch_alarm_context, update_alarm_status
+2026-06-23 15:00:53.791 | INFO     | skills.registry:register:29 - 注册 Skill: kb_regulation (tool)
+2026-06-23 15:00:53.791 | INFO     | skills.kb.skill:register_kb_skill:116 - 注册 Skill: kb_regulation
+2026-06-23 15:00:53.791 | INFO     | skills.init:init_skill_registry:84 - Skill Registry 初始化完成，共 26 个 Skill (分布: {'tool': 6, 'mcp_tool': 19, 'subgraph': 1})
+2026-06-23 15:00:53.792 | INFO     | main:lifespan:57 - Skill Registry 已就绪
+2026-06-23 15:00:53.854 | INFO     | graph.redis_checkpoint:__init__:64 - [Memory] RedisCheckpointSaver 初始化完成 (prefix=ksagent:memory:, ttl=2592000s)
+2026-06-23 15:00:53.854 | INFO     | graph.memory:get_checkpointer:96 - [Memory] 使用 Redis 持久化存储（重启后记忆保留）
+2026-06-23 15:00:53.856 | INFO     | graph.graph:build_graph:66 - LangGraph 图构建完成（含多模态分支 + 短期记忆 checkpointer）
+2026-06-23 15:00:53.857 | INFO     | main:lifespan:61 - LangGraph 图已就绪
+2026-06-23 15:00:53.892 | INFO     | main:_mount_generated_agents:120 - 挂载已发布 Agent: alarm_query_agent -> /agents/alarm_query_agent/chat
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
-INFO:     127.0.0.1:6848 - "GET /health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:6856 - "GET /health HTTP/1.1" 200 OK
-2026-06-16 09:51:44.545 | INFO     | main:chat:164 - [Chat] session=after_bg msg_len=2 images=0
-2026-06-16 09:51:44.556 | INFO     | graph.nodes:planner_node:75 - [Planner] 开始规划任务，用户消息: 你好
-2026-06-16 09:51:46.415 | INFO     | graph.nodes:planner_node:213 - [Planner] 生成计划: [{'task': 'system_menus', 'args': {'all': True}}]
-2026-06-16 09:51:46.416 | INFO     | graph.nodes:executor_node:344 - [Executor] 执行任务 1/1: system_menus
-2026-06-16 09:51:46.417 | INFO     | skills.registry:invoke:68 - 调用 Skill: system_menus (mcp_tool)
-2026-06-16 09:51:46.417 | INFO     | mcp_adapter.client:call_tool:158 - 调用 MCP 工具: ksipms.system_menus args={'all': True}
-2026-06-16 09:51:46.437 | INFO     | graph.nodes:formatter_node:1002 - [Formatter] 格式化最终响应
-2026-06-16 09:51:46.439 | INFO     | graph.nodes:formatter_node:1099 - [Formatter] 触发结构化摘要路径 (large_data=False, event_array=False, aggregate=False, summary_len=20348)
-INFO:     127.0.0.1:53974 - "POST /api/v1/chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56004 - "GET /health HTTP/1.1" 200 OK
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [1942112]
+INFO:     127.0.0.1:36618 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36622 - "GET /health HTTP/1.1" 200 OK
+2026-06-23 15:01:15.752 | INFO     | main:chat:169 - [Chat] session=session_1781489316891_3 msg_len=2 images=0 stream=True
+INFO:     127.0.0.1:42866 - "POST /api/v1/chat HTTP/1.1" 200 OK
+2026-06-23 15:01:15.769 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:15.771 | INFO     | graph.nodes:planner_node:77 - [Planner] 开始规划任务，用户消息: 你好
+2026-06-23 15:01:15.772 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:15.773 | INFO     | graph.pre_router:pre_route:49 - [PreRouter] 命中闲聊规则: ^(你好|您好|hi|hello|嗨|hey)[\s！!。.？?]*$
+2026-06-23 15:01:15.773 | INFO     | graph.nodes:planner_node:84 - [Planner] 预路由命中: direct_response
+2026-06-23 15:01:15.774 | INFO     | graph.nodes:executor_node:316 - [Executor] 执行任务 1/1: direct_response
+2026-06-23 15:01:15.775 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:15.776 | INFO     | skills.registry:invoke:68 - 调用 Skill: direct_response (tool)
+2026-06-23 15:01:15.777 | INFO     | graph.nodes:formatter_node:968 - [Formatter] 格式化最终响应
+2026-06-23 15:01:15.779 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:15.868 | INFO     | graph.nodes:memorize_node:1288 - [Memorize] 写入短期记忆：+2 条 session=session_1781489316891_3
+2026-06-23 15:01:15.869 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:15.871 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:27.295 | INFO     | main:chat:169 - [Chat] session=session_1781489316891_3 msg_len=10 images=0 stream=True
+INFO:     127.0.0.1:9110 - "POST /api/v1/chat HTTP/1.1" 200 OK
+2026-06-23 15:01:27.298 | DEBUG    | graph.redis_checkpoint:get_tuple:199 - [Memory] Checkpoint tuple 已加载: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:27.302 | INFO     | graph.nodes:planner_node:77 - [Planner] 开始规划任务，用户消息: 介绍一下人工智能行业
+2026-06-23 15:01:27.302 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:27.307 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:34.604 | INFO     | graph.nodes:planner_node:231 - [Planner] 生成计划: [{'task': 'direct_response', 'args': {'text': '人工智能（AI）是模拟、延伸和扩展人类智能的科技，涵盖机器学习、深度学习、自然语言处理、计算机视觉、语音识别、智能推荐、自动驾驶等多个领域。它在工业、医疗、金融、教育、安防、交通、娱乐等领域广泛应用，推动社会智能化转型。当前，AI 正朝着通用人工智能（AGI）发展，目标是实现类似人类的自主思考与决策能力。在中国，人工智能产业政策持续支持，已形成完整的产业链和生态体系。'}}]
+2026-06-23 15:01:34.605 | INFO     | graph.nodes:executor_node:316 - [Executor] 执行任务 1/1: direct_response
+2026-06-23 15:01:34.607 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:34.607 | INFO     | skills.registry:invoke:68 - 调用 Skill: direct_response (tool)
+2026-06-23 15:01:34.609 | INFO     | graph.nodes:formatter_node:968 - [Formatter] 格式化最终响应
+2026-06-23 15:01:34.610 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:34.611 | INFO     | graph.nodes:memorize_node:1288 - [Memorize] 写入短期记忆：+2 条 session=session_1781489316891_3
+2026-06-23 15:01:34.613 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+2026-06-23 15:01:34.615 | DEBUG    | graph.redis_checkpoint:put:121 - [Memory] Checkpoint 已保存: ksagent:memory:session_1781489316891_3
+INFO:     127.0.0.1:1988 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55300 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:17884 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56270 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56270 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56270 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56270 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:61754 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:61754 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:37380 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:37380 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56384 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:28900 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:28900 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:30388 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:30388 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:30388 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:9040 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:9040 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:38402 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:1112 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:1112 - "GET /api/v1/sessions?user_id=__probe__ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:41520 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:41520 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
