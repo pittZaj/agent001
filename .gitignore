@@ -13,8 +13,15 @@ __pycache__/
 .venv/
 venv/
 
+**/__pycache__/
+**/__pycache__/**
+
+**/__pycache__/**/*.pyc
 # 数据库 / 运行时
 *.db-shm
 *.db-wal
 qdrant_storage/
 agent/web/web.log
+agent/web/agent.log
+agent/api.log
+agent/api.pid
