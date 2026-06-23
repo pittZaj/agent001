@@ -917,27 +917,6 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
     }
 
 
-def _get_nested_field(data: Any, field_path: str) -> Any:
-    """
-    从嵌套字典中获取字段值，支持点号分隔的路径
-
-    例如：_get_nested_field({"data": {"camera_id": "CAM-001"}}, "data.camera_id") -> "CAM-001"
-    """
-    if not isinstance(data, dict):
-        return None
-
-    parts = field_path.split(".")
-    current = data
-
-    for part in parts:
-        if isinstance(current, dict) and part in current:
-            current = current[part]
-        else:
-            return None
-
-    return current
-
-
 def _strip_large_fields(data, _max_str=800, _max_array_items=10):
     """递归剥离工具结果里的超大字段（如 base64 图片、大数组），避免撑爆 LLM 上下文。
 
