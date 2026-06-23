@@ -243,20 +243,35 @@ class RedisCheckpointSaver(BaseCheckpointSaver):
             return []
 
     def delete(self, thread_id: str, checkpoint_ns: str = "") -> bool:
-        """删除指定会话的 checkpoint
+        """删除指定会话的全部 Redis 数据（checkpoint、命名空间、:meta 元数据）。
 
-        Args:
-            thread_id: 会话 ID
-            checkpoint_ns: 命名空间
-
-        Returns:
-            是否删除成功
+        LangGraph 可能写入：
+          - {prefix}{thread_id}
+          - {prefix}{thread_id}:{checkpoint_ns}
+          - {prefix}{thread_id}:meta  （会话标题，新建/重命名时写入）
+        仅删主 key 会导致列表仍能看到该会话。
         """
-        key = self._make_key(thread_id, checkpoint_ns)
+        if not thread_id:
+            return False
         try:
-            result = self.redis.delete(key)
-            logger.info(f"[Memory] Checkpoint 已删除: {key}")
-            return result > 0
+            # 兼容旧调用：若指定了 checkpoint_ns，仍只删该 key
+            if checkpoint_ns:
+                key = self._make_key(thread_id, checkpoint_ns)
+                result = self.redis.delete(key)
+                logger.info(f"[Memory] Checkpoint 已删除: {key}")
+                return result > 0
+
+            pattern = f"{self.key_prefix}{thread_id}*"
+            keys = self.redis.keys(pattern)
+            if not keys:
+                logger.warning(f"[Memory] 未找到会话 key: {pattern}")
+                return False
+            deleted = self.redis.delete(*keys)
+            logger.info(
+                f"[Memory] 会话 {thread_id} 已删除 {deleted} 个 key "
+                f"({len(keys)} 个匹配)"
+            )
+            return deleted > 0
         except Exception as e:
             logger.error(f"[Memory] Checkpoint 删除失败: {e}")
             return False

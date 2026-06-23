@@ -109,7 +109,10 @@ class SessionManager:
             # 检查是否有 delete 方法
             if hasattr(self.checkpointer, "delete") and callable(getattr(self.checkpointer, "delete")):
                 result = self.checkpointer.delete(thread_id)
-                logger.info(f"[SessionManager] 会话 {thread_id} 已删除")
+                if result:
+                    logger.info(f"[SessionManager] 会话 {thread_id} 已删除")
+                else:
+                    logger.warning(f"[SessionManager] 会话 {thread_id} 删除未命中任何 Redis key")
                 return result
             else:
                 logger.warning("[SessionManager] RedisCheckpointSaver 缺少 delete 方法")
