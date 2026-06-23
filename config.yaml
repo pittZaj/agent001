@@ -19,6 +19,14 @@ mcp:
   # OM 静态资源根（用于 ai_event_*.img_path 等相对路径转绝对 URL）
   om_base_url: "http://192.168.1.199:6611"
   timeout: 30
+  # 单次工具调用超时（区别于连接 timeout，T5 引入）
+  # 超过此值视为瞬时错误，会触发重试
+  timeout_call: 30
+  # 调用重试配置（T5 引入：瞬时错误指数退避重试）
+  retry:
+    max_attempts: 3            # 含首次，即重试 2 次（1 失败 → 2 → 3）
+    backoff_base: 0.5          # 秒，指数退避基数（0.5s, 1.0s, 2.0s ...）
+    backoff_max: 4.0           # 秒，单次最大退避（防止过长等待）
 
 # RAG 知识库（可选，阶段 3 接入）
 rag:

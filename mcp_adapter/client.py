@@ -4,6 +4,8 @@ import threading
 from contextlib import AsyncExitStack
 from typing import Any, Dict, Optional
 
+import anyio
+import httpx
 from loguru import logger
 
 from mcp import ClientSession
@@ -11,6 +13,20 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from utils import CONFIG
+
+
+# ===================== T5: 错误分级 + 指数退避重试（瞬时错误） =====================
+# 瞬时错误（可重试）：网络抖动、读超时、anyio 流断开、HTTP 连接错等
+# 这些错误重试有意义；业务错（isError=True）和未知异常不重试。
+RETRIABLE_EXCEPTIONS = (
+    asyncio.TimeoutError,             # asyncio.wait_for 超时（== TimeoutError）
+    ConnectionError,                  # 标准库连接错误基类
+    anyio.BrokenResourceError,        # anyio 流被对端断开
+    anyio.ClosedResourceError,        # anyio 流已关闭
+    httpx.ConnectError,               # HTTP 连接失败
+    httpx.ReadTimeout,                # HTTP 读超时
+    httpx.RemoteProtocolError,        # HTTP 协议错（如对端中途断开）
+)
 
 
 class MCPClient:
@@ -149,43 +165,106 @@ class MCPClient:
     async def call_tool(
         self, server_name: str, tool_name: str, args: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """调用 MCP 工具，返回结构化结果（dict）"""
+        """调用 MCP 工具，返回结构化结果（dict）
+
+        T5 改造：对瞬时性错误做指数退避重试（默认 2 次），区分三类错误：
+            - 瞬时错误（RETRIABLE_EXCEPTIONS）：超时/连接断开 → 退避后重试
+            - 业务错（isError=True）：参数错/权限 → 立即返回，重试无意义
+            - 其他异常：未知错误 → 立即返回，避免放大问题
+
+        关键约束：重试只在同一 session 上进行（幂等重试），不触发 force_reconnect。
+        连接失效的重连仍交给 registry.invoke 现有逻辑处理（避免跨任务关连接的
+        cancel scope 崩溃）。
+        """
         if server_name not in self.servers:
             return {"error": f"MCP server {server_name} 未连接"}
 
         session: ClientSession = self.servers[server_name]["session"]
-        try:
-            logger.info(f"调用 MCP 工具: {server_name}.{tool_name} args={args}")
-            result = await session.call_tool(tool_name, args)
 
-            # MCP 失败语义：isError=True 时，content 为可读错误文本
-            if getattr(result, "isError", False):
-                err_text = ""
+        # 读取重试配置（缺失时用安全默认值，等价于"重试 2 次"）
+        retry_cfg = self.config.get("retry") or {}
+        max_attempts = int(retry_cfg.get("max_attempts", 3))
+        backoff_base = float(retry_cfg.get("backoff_base", 0.5))
+        backoff_max = float(retry_cfg.get("backoff_max", 4.0))
+        timeout_call = float(self.config.get("timeout_call", 30))
+
+        logger.info(f"调用 MCP 工具: {server_name}.{tool_name} args={args}")
+
+        last_err: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # asyncio.wait_for 包裹：超时即抛 asyncio.TimeoutError，命中 RETRIABLE
+                result = await asyncio.wait_for(
+                    session.call_tool(tool_name, args),
+                    timeout=timeout_call,
+                )
+
+                # MCP 失败语义：isError=True 是业务错，立即返回不重试
+                if getattr(result, "isError", False):
+                    err_text = ""
+                    if result.content:
+                        first = result.content[0]
+                        err_text = getattr(first, "text", str(first))
+                    logger.warning(f"工具 {tool_name} 返回错误: {err_text}")
+                    return {"error": err_text or "tool returned isError=true"}
+
+                # 优先使用 structuredContent（MCP 2025-06-18 规范的结构化输出）
+                structured = getattr(result, "structuredContent", None)
+                if structured:
+                    return structured
+
+                # 退化到解析 TextContent
                 if result.content:
-                    first = result.content[0]
-                    err_text = getattr(first, "text", str(first))
-                logger.warning(f"工具 {tool_name} 返回错误: {err_text}")
-                return {"error": err_text or "tool returned isError=true"}
+                    content = result.content[0]
+                    text = getattr(content, "text", None)
+                    if text is not None:
+                        try:
+                            return json.loads(text)
+                        except json.JSONDecodeError:
+                            return {"result": text}
 
-            # 优先使用 structuredContent（MCP 2025-06-18 规范的结构化输出）
-            structured = getattr(result, "structuredContent", None)
-            if structured:
-                return structured
+                return {"result": None}
 
-            # 退化到解析 TextContent
-            if result.content:
-                content = result.content[0]
-                text = getattr(content, "text", None)
-                if text is not None:
+            except RETRIABLE_EXCEPTIONS as e:
+                # 瞬时错误：可重试
+                last_err = e
+                if attempt < max_attempts:
+                    delay = min(backoff_base * (2 ** (attempt - 1)), backoff_max)
+                    logger.warning(
+                        f"[MCP] {tool_name} 第 {attempt}/{max_attempts} 次失败"
+                        f"({type(e).__name__}: {e})，{delay:.1f}s 后重试…"
+                    )
+                    # 进度层联动：通知用户"网络抖动重试中"，避免误以为卡死
                     try:
-                        return json.loads(text)
-                    except json.JSONDecodeError:
-                        return {"result": text}
+                        from graph.streaming import emit_status
+                        emit_status(
+                            "retrying",
+                            f"网络抖动，正在重试调用「{tool_name}」（第 {attempt + 1}/{max_attempts} 次）…",
+                        )
+                    except Exception:
+                        pass  # streaming 模块不可用时静默跳过
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # 最后一次仍失败，跳出循环走兜底返回
+                    logger.error(
+                        f"[MCP] {tool_name} 重试 {max_attempts} 次仍失败: "
+                        f"{type(e).__name__}: {e}"
+                    )
 
-            return {"result": None}
-        except Exception as e:
-            logger.exception(f"call_tool 失败: {tool_name}")
-            return {"error": f"{type(e).__name__}: {e}"}
+            except Exception as e:
+                # 未知异常：不重试，立即返回（避免放大问题）
+                logger.exception(f"call_tool 失败（非瞬时错误，不重试）: {tool_name}")
+                return {"error": f"{type(e).__name__}: {e}"}
+
+        # 所有重试均失败的兜底返回
+        return {
+            "error": (
+                f"重试 {max_attempts} 次仍失败: "
+                f"{type(last_err).__name__}: {last_err}"
+                if last_err else "MCP 调用失败"
+            )
+        }
 
     async def close(self) -> None:
         """关闭所有 server 连接"""

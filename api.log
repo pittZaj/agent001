@@ -113,3 +113,10 @@ INFO:     127.0.0.1:1112 - "GET /health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:1112 - "GET /api/v1/sessions?user_id=__probe__ HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:41520 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:41520 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:4480 - "GET /api/v1/sessions?user_id=kszn HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:4480 - "POST /api/v1/sessions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:18144 - "PUT /api/v1/sessions/sess_kszn_16272ea1bc78 HTTP/1.1" 404 Not Found
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2707480]

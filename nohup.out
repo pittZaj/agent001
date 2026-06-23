@@ -59,3 +59,4 @@ For more information see https://docs.conda.io/projects/conda/en/stable/user-gui
   chatbot = gr.Chatbot(
 /mnt/data3/clip/LangGraph/agent/agent/web/app.py:667: DeprecationWarning: The default value of 'allow_tags' in gr.Chatbot will be changed from False to True in Gradio 6.0. You will need to explicitly set allow_tags=False if you want to disable tags in your chatbot.
   chatbot = gr.Chatbot(
+restart_web_agent_of_agent.sh: line 57: 3293806 Killed                  python web/app.py
