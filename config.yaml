@@ -15,9 +15,9 @@ llm:
 mcp:
   enabled: true
   transport: http              # http | stdio（http 直连远程 MCP Server）
-  endpoint: "http://192.168.1.199:6620/mcp"
+  endpoint: "http://127.0.0.1:6620/mcp"
   # OM 静态资源根（用于 ai_event_*.img_path 等相对路径转绝对 URL）
-  om_base_url: "http://192.168.1.199:6611"
+  om_base_url: "http://127.0.0.1:6611"
   timeout: 30
   # 单次工具调用超时（区别于连接 timeout，T5 引入）
   # 超过此值视为瞬时错误，会触发重试
@@ -28,17 +28,36 @@ mcp:
     backoff_base: 0.5          # 秒，指数退避基数（0.5s, 1.0s, 2.0s ...）
     backoff_max: 4.0           # 秒，单次最大退避（防止过长等待）
 
-# RAG 知识库（可选，阶段 3 接入）
+# 知识库（MySQL 元数据 + Qdrant 向量，由 KSAgent 统一管理）
+kb:
+  qdrant_host: "localhost"
+  qdrant_port: 6333
+  collection_name: "safety_regulations"
+  upload_dir: "/mnt/data/clip/LangGraph/agent/data/kb_uploads"
+  source_dir: "/mnt/data/clip/LangGraph/agent/data/kb_sources"
+  embedding_model_path: "/mnt/data/clip/LangGraph/VLLM/BGE-M3"
+  reranker_model_path: "/mnt/data/clip/LangGraph/VLLM/bge-reranker-v2-m3"
+  device: "cuda:0"
+  chunk_size: 300
+  chunk_overlap: 50
+
+# RAG 知识库（对话检索开关，阶段 3 接入）
 rag:
   enabled: false
   ragflow_url: "http://ragflow.internal:8080"
   dataset_id: "safety_regulations"
   top_k: 3
 
-# 数据库（会话历史、任务日志）
+# 数据库（知识库元数据：分组、文档索引；向量仍在 Qdrant）
 database:
-  enabled: false  # 阶段 1 不持久化，阶段 4 再开启
-  url: "mysql+aiomysql://ksagent:password@localhost:3306/ksagent"
+  enabled: true
+  url: "mysql+pymysql://root:keshuzhineng@127.0.0.1:6669/ksom"
+  # 也可显式指定（url 优先）:
+  # host: "127.0.0.1"
+  # port: 3306
+  # user: "ksagent"
+  # password: "password"
+  # name: "ksagent"
   pool_size: 10
   echo: false
 

@@ -50,12 +50,29 @@ class KBConfig:
     recall_multiplier: int = 4       # 召回 top_k * 倍数 后重排
     score_threshold: float | None = 0.5  # 重排序最低分（0.5-0.7，低了不相关内容会出现）
 
-    # 上传文件暂存
+    # 上传暂存 / 源文档永久存储
     upload_dir: str = "/mnt/data3/clip/LangGraph/agent/data/kb_uploads"
+    source_dir: str = "/mnt/data3/clip/LangGraph/agent/data/kb_sources"
 
 
 def get_kb_config() -> KBConfig:
-    """获取知识库配置"""
-    return KBConfig()
+    """从 config.yaml 的 kb 段读取，未配置则用默认值。"""
+    try:
+        from utils import CONFIG
+        kb = CONFIG.get("kb") or {}
+    except Exception:
+        kb = {}
+    return KBConfig(
+        qdrant_host=str(kb.get("qdrant_host", "localhost")),
+        qdrant_port=int(kb.get("qdrant_port", 6333)),
+        collection_name=str(kb.get("collection_name", "safety_regulations")),
+        embedding_model_path=str(kb.get("embedding_model_path", "/mnt/data3/clip/LangGraph/VLLM/BGE-M3")),
+        reranker_model_path=str(kb.get("reranker_model_path", "/mnt/data3/clip/LangGraph/VLLM/bge-reranker-v2-m3")),
+        device=str(kb.get("device", "cuda:0")),
+        chunk_size=int(kb.get("chunk_size", 300)),
+        chunk_overlap=int(kb.get("chunk_overlap", 50)),
+        upload_dir=str(kb.get("upload_dir", "/mnt/data3/clip/LangGraph/agent/data/kb_uploads")),
+        source_dir=str(kb.get("source_dir", "/mnt/data3/clip/LangGraph/agent/data/kb_sources")),
+    )
 
 

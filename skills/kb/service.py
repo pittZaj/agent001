@@ -31,6 +31,15 @@ from sentence_transformers import SentenceTransformer
 from FlagEmbedding import FlagReranker
 
 from .config import KBConfig, get_kb_config, ChunkStrategy, RetrievalMode
+from .mysql_store import get_mysql_store
+from .source_files import (
+    archive_source,
+    content_disposition_header,
+    remove_source,
+    remove_source_by_doc_id,
+    remove_source_tree,
+    resolve_source_file_path,
+)
 
 VECTOR_DIM = 1024  # BGE-M3 输出维度
 
@@ -198,8 +207,12 @@ class KnowledgeBaseService:
         # 3. 向量化
         vectors = self._embed(texts)
 
-        # 4. 入库
+        # 4. 归档源文件 + 入库
         doc_id = str(uuid.uuid4())
+        filename = metadata.get("filename") or os.path.basename(file_path)
+        source_path, file_size = archive_source(
+            self.config.source_dir, doc_id, file_path, filename
+        )
         points = [
             PointStruct(
                 id=str(uuid.uuid4()),
@@ -210,12 +223,39 @@ class KnowledgeBaseService:
                     "chunk_index": i,
                     "title": metadata.get("title", ""),
                     "category": metadata.get("category", "其他"),
-                    "filename": metadata.get("filename", ""),
+                    "filename": filename,
                 },
             )
             for i, (text, vec) in enumerate(zip(texts, vectors))
         ]
-        self.client.upsert(collection_name=self.collection_name, points=points)
+        try:
+            self.client.upsert(collection_name=self.collection_name, points=points)
+            store = get_mysql_store()
+            if store:
+                group_id = metadata.get("group_id")
+                if group_id is not None:
+                    try:
+                        group_id = int(group_id)
+                    except (TypeError, ValueError):
+                        group_id = None
+                store.insert_document(
+                    doc_id=doc_id,
+                    title=metadata.get("title", ""),
+                    category=metadata.get("category", "其他"),
+                    filename=filename,
+                    chunks_count=len(points),
+                    group_id=group_id,
+                    source_file_path=source_path,
+                    file_size=file_size,
+                    chunk_strategy=strategy.value,
+                    chunk_size=size,
+                    chunk_overlap=overlap,
+                )
+        except Exception:
+            self._delete_vectors_by_doc_id(doc_id)
+            remove_source(source_path)
+            remove_source_by_doc_id(self.config.source_dir, doc_id)
+            raise
         extra_info = f"strategy={strategy.value}"
         if strategy == ChunkStrategy.FIXED_SIZE:
             extra_info += f", size={size}, overlap={overlap}"
@@ -224,7 +264,13 @@ class KnowledgeBaseService:
         logger.info(
             f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, title={metadata.get('title')}"
         )
-        return {"doc_id": doc_id, "chunks_count": len(points)}
+        return {
+            "doc_id": doc_id,
+            "chunks_count": len(points),
+            "has_source": True,
+            "filename": filename,
+            "file_size": file_size,
+        }
 
 
     # __SPLIT2__
@@ -338,19 +384,79 @@ class KnowledgeBaseService:
                 break
         return list(recall) + extra
 
+    def _delete_vectors_by_doc_id(self, doc_id: str) -> int:
+        """按 doc_id 删除 Qdrant 中所有分块，返回删除数量。"""
+        flt = Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
+        count = self.client.count(self.collection_name, count_filter=flt).count
+        if count:
+            self.client.delete(collection_name=self.collection_name, points_selector=flt)
+        return count
 
     # __SPLIT3__
 
+    def get_document(self, doc_id: str) -> dict[str, Any] | None:
+        store = get_mysql_store()
+        if store:
+            return store.get_document(doc_id)
+        docs = self.list_documents()
+        for d in docs:
+            if d.get("doc_id") == doc_id:
+                return d
+        return None
+
+    def get_source_file_path(self, doc_id: str) -> str | None:
+        return resolve_source_file_path(doc_id)
+
+    def update_document_group(self, doc_id: str, group_id: int | None) -> dict[str, Any]:
+        store = get_mysql_store()
+        if not store:
+            raise ValueError("MySQL 未启用，无法修改文档分组")
+        return store.update_document_group(doc_id, group_id)
+
     def delete_document(self, doc_id: str) -> int:
-        """删除文档的所有分块，返回删除的向量数"""
-        flt = Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
-        count = self.client.count(self.collection_name, count_filter=flt).count
-        self.client.delete(collection_name=self.collection_name, points_selector=flt)
+        """删除文档的所有分块，返回删除的向量数（同步 Qdrant + MySQL + 源文件）。"""
+        store = get_mysql_store()
+        source_path = None
+        if store:
+            doc = store.get_document(doc_id)
+            if doc:
+                source_path = doc.get("source_file_path") or None
+        count = self._delete_vectors_by_doc_id(doc_id)
+        if store:
+            deleted_path = store.delete_document(doc_id)
+            if not source_path:
+                source_path = deleted_path
+        remove_source(source_path)
+        remove_source_by_doc_id(self.config.source_dir, doc_id)
         logger.info(f"删除文档 doc_id={doc_id}, chunks={count}")
         return count
 
-    def list_documents(self) -> list[dict[str, Any]]:
-        """列出所有文档（按 doc_id 去重，含分块数）"""
+    def delete_chunk(self, point_id: str) -> bool:
+        """删除单个分块（同步 Qdrant；最后一个分块时连带删除文档元数据与源文件）。"""
+        recs = self.client.retrieve(self.collection_name, ids=[point_id], with_payload=True)
+        if not recs:
+            raise ValueError(f"分块不存在: {point_id}")
+        doc_id = recs[0].payload.get("doc_id")
+        self.client.delete(collection_name=self.collection_name, points_selector=[point_id])
+        remaining = 0
+        if doc_id:
+            remaining = len(self.get_document_chunks(doc_id))
+            store = get_mysql_store()
+            if store:
+                if remaining == 0:
+                    source_path = store.delete_document(doc_id)
+                    remove_source(source_path)
+                    remove_source_by_doc_id(self.config.source_dir, doc_id)
+                else:
+                    store.update_chunks_count(doc_id, remaining)
+        logger.info(f"删除分块 point_id={point_id}, doc_id={doc_id}, remaining={remaining}")
+        return True
+
+    def list_documents(self, group_id: int | None = None) -> list[dict[str, Any]]:
+        """列出所有文档（优先 MySQL 元数据，否则从 Qdrant 聚合）"""
+        store = get_mysql_store()
+        if store:
+            return store.list_documents(group_id=group_id)
         docs: dict[str, dict] = {}
         offset = None
         while True:
@@ -400,14 +506,16 @@ class KnowledgeBaseService:
         return chunks
 
     def update_chunk(self, point_id: str, new_text: str) -> bool:
-        """修改单个分块内容（重新向量化并更新）"""
-        # 取出原 payload
+        """修改单个分块内容（重新向量化并 upsert 同 point_id，防止旧向量残留）。"""
+        text = new_text.strip()
+        if not text:
+            raise ValueError("分块内容不能为空")
         recs = self.client.retrieve(self.collection_name, ids=[point_id], with_payload=True)
         if not recs:
             raise ValueError(f"分块不存在: {point_id}")
         payload = dict(recs[0].payload)
-        payload["text"] = new_text.strip()
-        vec = self._embed([new_text.strip()])[0]
+        payload["text"] = text
+        vec = self._embed([text])[0]
         self.client.upsert(
             collection_name=self.collection_name,
             points=[PointStruct(id=point_id, vector=vec, payload=payload)],
@@ -423,16 +531,23 @@ class KnowledgeBaseService:
             n = 0
         self.client.delete_collection(self.collection_name)
         self._init_collection()
+        store = get_mysql_store()
+        if store:
+            store.clear_documents()
+        remove_source_tree(self.config.source_dir)
         logger.info(f"清空知识库 collection={self.collection_name}, 原向量数={n}")
         return n
 
     def get_stats(self) -> dict[str, Any]:
         """知识库统计信息"""
         info = self.client.get_collection(self.collection_name)
+        store = get_mysql_store()
+        total_docs = store.count_documents() if store else len(self.list_documents())
         return {
             "total_vectors": info.points_count,
-            "total_documents": len(self.list_documents()),
+            "total_documents": total_docs,
             "collection_name": self.collection_name,
+            "mysql_enabled": store is not None,
         }
 
 

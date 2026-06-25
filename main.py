@@ -23,7 +23,7 @@ from loguru import logger
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from utils import CONFIG
+from utils import CONFIG, CONFIG_PATH
 from models import (
     ChatRequest,
     ChatResponse,
@@ -33,6 +33,7 @@ from models import (
 )
 from graph import get_graph, run_graph_stream
 from utils.vlm import get_vlm_client
+from api.kb_routes import router as kb_router
 
 
 # ===================== 启动事件（lifespan，兼容新版 starlette）=====================
@@ -46,6 +47,21 @@ async def lifespan(app: FastAPI):
     logger.info(f"   LLM 后端: {CONFIG['llm']['base_url']}")
     logger.info(f"   模型名称: {CONFIG['llm']['model']}")
     logger.info(f"   MCP 启用: {CONFIG['mcp']['enabled']}")
+    from skills.kb.mysql_store import get_mysql_store, load_mysql_config
+    kb_mysql = load_mysql_config()
+    if kb_mysql.enabled:
+        logger.info(
+            f"   KB MySQL: {kb_mysql.host}:{kb_mysql.port}/{kb_mysql.database} "
+            f"(config: {CONFIG_PATH})"
+        )
+        store = get_mysql_store()
+        if store:
+            store.ensure_schema()
+            logger.info("   KB MySQL schema 已校验")
+    else:
+        logger.warning(
+            f"   KB MySQL: 未启用，知识库分组不可用 (config: {CONFIG_PATH})"
+        )
     logger.info("=" * 60)
 
     # 初始化 Skill Registry
@@ -80,6 +96,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(kb_router)
 
 
 # ===================== Agent-of-Agent 注册路由 =====================
