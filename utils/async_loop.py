@@ -27,12 +27,14 @@ anyio 试图在"另一个任务"里退出该作用域，于是抛出：
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 from typing import Any, Coroutine
 
 from loguru import logger
 
 _loop: asyncio.AbstractEventLoop | None = None
+_loop_ready = threading.Event()
 _lock = threading.Lock()
 
 
@@ -45,23 +47,48 @@ def get_background_loop() -> asyncio.AbstractEventLoop:
         if _loop is not None and not _loop.is_closed():
             return _loop
         loop = asyncio.new_event_loop()
+        _loop_ready.clear()
 
         def _run() -> None:
             asyncio.set_event_loop(loop)
+            _loop_ready.set()
             loop.run_forever()
 
         threading.Thread(target=_run, name="ksagent-mcp-loop", daemon=True).start()
+        if not _loop_ready.wait(timeout=10):
+            raise RuntimeError("[async_loop] 后台事件循环 10s 内未就绪")
         logger.info("[async_loop] 后台事件循环已启动 (thread=ksagent-mcp-loop)")
         _loop = loop
         return loop
 
 
-def run_on_background_loop(coro: Coroutine) -> Any:
-    """把协程投递到后台循环执行并同步等待结果（供同步图节点 / 初始化调用）。
+def run_on_background_loop(coro: Coroutine, timeout: float | None = None) -> Any:
+    """把协程投递到后台循环执行并同步等待结果（供同步图节点调用）。
 
-    调用方必须运行在**其它线程**（图工作线程、uvicorn 线程等），绝不能在后台循环
-    线程内调用自身——那会自我阻塞。本平台所有调用点均满足此约束。
+    调用方必须运行在**其它线程**（图工作线程等），绝不能在后台循环
+    线程内调用自身——那会自我阻塞。
+
+    注意：FastAPI lifespan 等 async 上下文请用 ``await_on_background_loop``，
+    避免 ``fut.result()`` 阻塞 uvicorn 事件循环导致启动被取消 (CancelledError)。
     """
     loop = get_background_loop()
     fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    return fut.result()
+    try:
+        return fut.result(timeout=timeout)
+    except concurrent.futures.CancelledError as exc:
+        raise RuntimeError(
+            "[async_loop] 后台协程被取消（常见于 lifespan 中同步阻塞 uvicorn 事件循环）；"
+            "async 上下文请改用 await_on_background_loop"
+        ) from exc
+
+
+async def await_on_background_loop(
+    coro: Coroutine, timeout: float | None = None
+) -> Any:
+    """在 async 上下文（FastAPI lifespan 等）非阻塞地等待后台循环上的协程完成。"""
+    loop = get_background_loop()
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    wrapped = asyncio.wrap_future(fut)
+    if timeout is not None:
+        return await asyncio.wait_for(wrapped, timeout=timeout)
+    return await wrapped

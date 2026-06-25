@@ -16,6 +16,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import asyncio
+
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,7 +58,7 @@ async def lifespan(app: FastAPI):
         )
         store = get_mysql_store()
         if store:
-            store.ensure_schema()
+            await asyncio.to_thread(store.ensure_schema)
             logger.info("   KB MySQL schema 已校验")
     else:
         logger.warning(
@@ -68,9 +70,12 @@ async def lifespan(app: FastAPI):
     #   在进程级后台循环上初始化，使 MCP 连接落在 bg-loop 线程；运行期同步节点的
     #   工具调用（_run_async → run_on_background_loop）跑在同一线程，复用此连接。
     from skills.init import init_skill_registry
-    from utils.async_loop import run_on_background_loop
-    run_on_background_loop(init_skill_registry())
-    logger.info("Skill Registry 已就绪")
+    from skills.mcp_watcher import start_mcp_watcher, stop_mcp_watcher
+    from utils.async_loop import await_on_background_loop
+    await await_on_background_loop(init_skill_registry(), timeout=30)
+    logger.info("Skill Registry 已就绪（MCP 工具由后台监听器异步上线）")
+
+    start_mcp_watcher()
 
     # 预热：构建图
     get_graph()
@@ -80,6 +85,8 @@ async def lifespan(app: FastAPI):
     _mount_generated_agents(app)
 
     yield  # 应用运行期
+
+    stop_mcp_watcher()
 
 
 app = FastAPI(
@@ -153,10 +160,18 @@ async def health():
     except Exception as e:
         logger.warning(f"LLM 健康检查失败: {e}")
 
+    from skills.mcp_watcher import is_mcp_online
+
+    mcp_online = is_mcp_online()
+    status = "ok" if llm_available else "degraded"
+    if CONFIG["mcp"].get("enabled") and not mcp_online:
+        status = "degraded"
+
     return HealthResponse(
-        status="ok" if llm_available else "degraded",
+        status=status,
         version="0.1.0",
         llm_available=llm_available,
+        mcp_online=mcp_online,
     )
 
 

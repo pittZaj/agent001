@@ -49,11 +49,12 @@ def _get_main_graph():
         if str(agent_root) not in sys.path:
             sys.path.insert(0, str(agent_root))
         from skills.init import init_skill_registry
+        from skills.mcp_watcher import start_mcp_watcher
         from graph import get_graph
-        # 在进程级后台循环上初始化：MCP 连接由此在 bg-loop 线程创建，
-        # 运行期工具调用（同样跑在该线程）才能命中线程本地缓存、复用同一条连接。
+        # 在进程级后台循环上初始化；MCP 由后台监听器异步连接，不阻塞启动。
         from utils.async_loop import run_on_background_loop
         run_on_background_loop(init_skill_registry())
+        start_mcp_watcher()
         _MAIN_GRAPH = get_graph()
     return _MAIN_GRAPH
 

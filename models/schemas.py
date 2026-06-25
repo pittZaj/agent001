@@ -63,3 +63,4 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
     llm_available: bool
+    mcp_online: bool = False

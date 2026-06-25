@@ -1,5 +1,5 @@
 # Web 框架
-fastapi==0.115.0
+fastapi==0.95.1
 uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 websockets==13.1
@@ -28,3 +28,5 @@ aiohttp==3.11.10
 python-dotenv==1.0.1
 loguru==0.7.3
 redis==5.2.1
+
+mcp[cli]==1.28.0

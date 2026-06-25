@@ -50,3 +50,14 @@ async def register_mcp_skills(registry: SkillRegistry, mcp_client) -> None:
             logger.error(f"注册 MCP server {server_name} 失败: {e}")
 
     logger.info(f"MCP Skills 注册完成，共 {total} 个工具")
+
+
+def unregister_mcp_skills(registry: SkillRegistry) -> None:
+    """注销所有 MCP 工具 Skill（断线或重连前清理）。"""
+    mcp_ids = [
+        s.id for s in registry.list_skills() if s.skill_type == SkillType.MCP_TOOL
+    ]
+    for skill_id in mcp_ids:
+        registry.unregister(skill_id)
+    if mcp_ids:
+        logger.info(f"已注销 {len(mcp_ids)} 个 MCP Skills")
