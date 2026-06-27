@@ -179,6 +179,11 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 - AI 事件主键：`uuid`（不是 alarm_uuid）→ ai_event_* 工具入参用 `event_uuid`
 - 时间字段：`created_at`，格式 "yyyy-MM-dd HH:mm:ss"；筛选用 `time_start`/`time_end`
 - 告警类型：`event_type`（算法编码，**必须取自上方"平台支持的 AI 告警类型"权威清单**）/ `event_name`（中文，如"未戴安全帽告警"）
+- 告警等级：`level`，可选值 red（红色/严重/紧急）、orange（橙色/重要）、yellow（黄色/一般）、blue（蓝色/提示）
+  · 用户说"紧急""严重""红色"告警 → 用 `level=red`
+  · 用户说"重要""橙色"告警 → 用 `level=orange`
+  · 用户说"一般""黄色"告警 → 用 `level=yellow`
+  · 用户说"提示""蓝色"告警 → 用 `level=blue`
 - 摄像机：`camera_uuid` / `camera_name`
 - 复核状态 review_status：1=待复核 2=已复核 3=已完成 5=误报
 
@@ -209,6 +214,9 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 - "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间、无数量限定）：
   · 不传 pagesize（或传大值如 10000），系统自动分页拉全量并统计
   · [{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]
+- "查紧急的未戴安全帽告警"（⚠️ 多个筛选条件组合在**同一个查询**中）：
+  · [{{"task":"ai_event_list","args":{{"event_type":"ET03007","level":"red"}}}}]
+  · **不要**拆成多个独立查询！筛选条件应该叠加在一起（AND 逻辑）
 - "查今天/昨天/某时间范围的 AI 告警"（按时间，统计全量）：
   · 不传 pagesize，系统会自动分页拉全量并生成统计摘要
   · [{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]
