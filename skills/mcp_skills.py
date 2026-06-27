@@ -12,6 +12,10 @@ def _classify_tool(tool_name: str) -> list[str]:
         tags.extend(["ai_event", "alarm"])
     elif tool_name.startswith("video_"):
         tags.append("video")
+    elif tool_name.startswith("record_"):
+        tags.append("video")
+    elif tool_name.startswith("compress_"):
+        tags.append("video")
     elif tool_name.startswith("system_"):
         tags.append("system")
     return tags

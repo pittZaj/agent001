@@ -27,6 +27,52 @@ PLAN_SCHEMA = {
 }
 
 
+def _first_line(text: str, limit: int = 72) -> str:
+    line = (text or "").strip().split("\n")[0].strip()
+    if len(line) > limit:
+        return line[: limit - 1] + "…"
+    return line
+
+
+def _format_skills_compact(skills) -> str:
+    """Planner 专用：仅 tool id + 一行摘要，不含参数 schema（控制 token）。"""
+    groups: dict[str, list] = {
+        "ai": [],
+        "video/record/compress": [],
+        "system": [],
+        "local": [],
+        "other": [],
+    }
+    for s in skills:
+        sid = s.id
+        if sid.startswith("ai_"):
+            groups["ai"].append(s)
+        elif sid.startswith(("video_", "record_", "compress_")):
+            groups["video/record/compress"].append(s)
+        elif sid.startswith("system_"):
+            groups["system"].append(s)
+        elif sid in ("direct_response", "stream_chat"):
+            groups["other"].append(s)
+        else:
+            groups["local"].append(s)
+
+    title_map = {
+        "ai": "AI",
+        "video/record/compress": "视频/录像/压缩",
+        "system": "系统",
+        "local": "本地分析/子图",
+        "other": "基础",
+    }
+    lines: list[str] = []
+    for key, items in groups.items():
+        if not items:
+            continue
+        lines.append(f"## {title_map[key]}")
+        for s in sorted(items, key=lambda x: x.id):
+            lines.append(f"- `{s.id}`: {_first_line(s.description)}")
+    return "\n".join(lines)
+
+
 def _format_skills_grouped(skills) -> str:
     """按真实平台分类组织工具描述（ai_*/video_*/system_* / 本地分析 / 子图）"""
     groups: dict[str, list] = {
@@ -75,10 +121,30 @@ def _format_skills_grouped(skills) -> str:
 #   - 新做法以平台后端算法宏定义（KSAI_* #define）为权威字典 → 准确回答"平台是否支持识别"，
 #     "是否有数据"则交给实际查询 ai_event_list 的 total 判断（formatter 空结果守卫处理）。
 from skills.event_types import (
-    SUPPORTED_EVENT_TYPES, is_supported,
-    catalog_lines as _supported_catalog_lines,
     catalog_inline as _supported_catalog_inline,
 )
+
+
+def _needs_event_catalog(user_message: str) -> bool:
+    """非告警/统计类问题（如纯录像/直播/压缩）省略完整 event_type 清单以节省 token。"""
+    msg = (user_message or "").strip()
+    video_kw = ("录像", "直播", "压缩", "主码流", "子码流", "回放", "flv", "预览")
+    alarm_kw = ("告警", "报警", "违规", "安全帽", "抽烟", "离岗", "入侵", "明火", "人脸", "统计", "复判")
+    if any(k in msg for k in video_kw) and not any(k in msg for k in alarm_kw):
+        return False
+    return True
+
+
+def _planner_catalog_block(user_message: str) -> str:
+    if not _needs_event_catalog(user_message):
+        return ""
+    names = _supported_catalog_inline()
+    return (
+        "# AI 告警类型（event_type 必取自平台字典，禁止编造）\n"
+        f"支持类型：{names}\n"
+        "规则：语义能匹配→`ai_event_list`+event_type；平台不支持→direct_response；"
+        "支持但暂无数据仍须查询后据实回复。"
+    )
 
 
 def planner_node(state: AgentState) -> Dict[str, Any]:
@@ -91,7 +157,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"[Planner] 开始规划任务，用户消息: {state['user_message']}")
     emit_status("planning", "正在理解你的问题并规划任务…")
 
-    # 🔧 新增：预路由（fast-path）—— 轻量分流，跳过大提示词
+    # 预路由：仅闲聊/纯规章走快路径；录像/告警/设备等统一由 Planner 解析
     from graph.pre_router import pre_route
     fast_result = pre_route(state["user_message"])
     if fast_result is not None:
@@ -104,27 +170,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     # 从 Skill Registry 获取可用工具，按平台分类组织
     registry = get_skill_registry()
     available_skills = registry.list_skills()
-    tools_text = _format_skills_grouped(available_skills) or "暂无可用工具"
+    tools_text = _format_skills_compact(available_skills) or "暂无可用工具"
 
-    # 注入"平台支持哪些 AI 告警类型"（权威静态字典，杜绝 LLM 凭空猜 event_type 编码）。
-    # 注意：这里是"平台支持识别的类型"，不代表数据库当前一定有该类告警记录——
-    # "有没有数据"由实际查询 ai_event_list 的结果决定（见 formatter 空结果守卫）。
-    catalog_text = _supported_catalog_lines()
-    catalog_names = _supported_catalog_inline()
-    catalog_block = f"""# 🎯 平台支持的 AI 告警类型（唯一权威清单，来自平台算法定义）
-**只有以下类型平台才能识别，event_type 编码必须从这里取，严禁编造或臆测其它编码：**
-{catalog_text}
-
-**类型匹配与防幻觉规则（极其重要，必须严格遵守）**：
-1. 先把用户说的告警名**语义匹配**到上表（例：吸烟/抽烟→违规抽烟 ET03002；安全帽→未戴安全帽 ET03007；
-   打电话/接电话→接打电话 ET03001；玩手机→使用手机 ET03009；打瞌睡/睡岗→打瞌睡检测 ET02007）。
-2. **能匹配到上表** → 用 `ai_event_list` 并带上对应的 `event_type`。
-   ⚠️ 此时即使该类型暂时没有数据，也**必须真的去查**，由系统根据真实返回结果如实告知
-   （"暂无此类告警记录" vs "查到 N 条"），**绝不能**自己提前断定"没有"或编造数量。
-3. **无法匹配到上表**（例如"跳舞""唱歌"等平台根本没有的算法）→ 平台不支持识别该类型，
-   **绝对不要猜一个编码去查**，直接返回：
-   `[{{"task":"direct_response","args":{{"text":"平台不支持识别「<用户所问类型>」这类告警。当前平台支持的告警类型有：{catalog_names}。"}}}}]`
-4. 区分两种"没有"：①平台不支持识别（走规则3，direct_response）；②平台支持但当前无数据（走规则2，照常查询，由系统据实回复）。绝不能把②当成①。"""
+    catalog_block = _planner_catalog_block(state["user_message"])
+    catalog_section = f"\n{catalog_block}\n" if catalog_block else ""
 
     # 使用 LLM 客户端单例（避免每次重新实例化）
     from utils.llm_pool import get_llm
@@ -146,9 +195,13 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         HumanMessage(content=state["user_message"]),
     ]
 
-    # 短期记忆：把本会话历史作为上下文拼进用户消息，便于指代消解
-    # （如"上面那条告警的详情""再画成饼图"）。无历史时为空串，零影响。
-    history_block = history_prompt_block(state.get("messages", []))
+    # 短期记忆：Planner 使用更短的历史窗口，避免超出模型 context
+    history_block = history_prompt_block(
+        state.get("messages", []),
+        max_turns=3,
+        max_chars=900,
+        per_message_chars=300,
+    )
     if history_block:
         messages = [
             SystemMessage(content=system_prompt),
@@ -658,6 +711,409 @@ def _generate_aggregate_chart(agg_data: list, group_label: str, total: int) -> s
         return None
 
 
+# MCP 分页列表类工具：走结构化摘要路径时原先只输出「执行完成」，需专用格式化
+_LIST_TOOL_SPECS: dict[str, dict] = {
+    "video_device_list": {
+        "items_key": "devices",
+        "label": "视频设备",
+        "name_keys": ("device_name", "deviceName", "name"),
+    },
+    "record_channel_list": {
+        "items_key": "channels",
+        "label": "录像通道",
+        "name_keys": ("device_name", "deviceName", "channel_name", "channelName"),
+    },
+    "record_plan_list": {
+        "items_key": "plans",
+        "label": "录像计划",
+        "name_keys": ("plan_name", "planName", "name"),
+    },
+    "ai_device_list": {
+        "items_key": "devices",
+        "label": "AI 分析设备",
+        "name_keys": ("device_name", "deviceName", "name", "keywords"),
+    },
+    "ai_camera_list": {
+        "items_key": "cameras",
+        "label": "AI 摄像机",
+        "name_keys": ("real_name", "realName", "camera_name", "cameraName", "name"),
+    },
+    "ai_task_list": {
+        "items_key": "tasks",
+        "label": "AI 分析任务",
+        "name_keys": ("name", "code", "camera_name", "cameraName"),
+    },
+    "compress_task_list": {
+        "items_key": "tasks",
+        "label": "压缩任务",
+        "name_keys": ("task_name", "taskName", "name", "device_name", "deviceName"),
+    },
+    "compress_device_list": {
+        "items_key": "devices",
+        "label": "压缩设备",
+        "name_keys": ("device_name", "deviceName", "name"),
+    },
+}
+
+
+def _item_display_name(item: dict, name_keys: tuple[str, ...]) -> str:
+    for key in name_keys:
+        if val := item.get(key):
+            return str(val)
+    if uid := item.get("uuid"):
+        return str(uid)
+    return "未知"
+
+
+def _format_simple_list_tool_response(user_message: str, tool_result: dict) -> str | None:
+    """格式化 MCP 分页列表类工具结果（数量统计 + 简要列表）。"""
+    tool_name = tool_result.get("tool")
+    spec = _LIST_TOOL_SPECS.get(tool_name or "")
+    if not spec:
+        return None
+
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    items_key = spec["items_key"]
+    label = spec["label"]
+    name_keys = spec["name_keys"]
+
+    items = result.get(items_key) or []
+    if not isinstance(items, list):
+        items = []
+
+    summary = result.get(f"{items_key}_summary") or {}
+    total = result.get("total")
+    if total is None and summary:
+        total = summary.get("total_count")
+    if total is None:
+        total = len(items)
+    try:
+        total = int(total)
+    except (TypeError, ValueError):
+        total = len(items)
+
+    showing = len(items)
+    truncated = int(summary.get("truncated") or 0) if summary else max(0, total - showing)
+
+    lines: list[str] = [f"平台共有 **{total}** 个{label}。"]
+    if total == 0:
+        lines.append("\n当前无匹配记录。")
+        return "\n".join(lines)
+
+    want_list = not any(k in (user_message or "") for k in ("多少", "几个", "数量", "总数", "共有"))
+    want_list = want_list or showing <= 15 or truncated > 0
+
+    if want_list and showing > 0:
+        title = f"\n### {label}列表"
+        if truncated > 0:
+            title += f"（展示前 {showing} 条，共 {total} 条）"
+        lines.append(title)
+        for i, raw in enumerate(items[:15], 1):
+            if not isinstance(raw, dict):
+                continue
+            name = _item_display_name(raw, name_keys)
+            ip = raw.get("device_ip") or raw.get("deviceIp")
+            status = raw.get("status")
+            line = f"{i}. **{name}**"
+            if ip:
+                line += f"（{ip}）"
+            if status is not None and str(status) != "":
+                line += f" — 状态 {status}"
+            lines.append(line)
+        if truncated > 0:
+            lines.append(f"\n> 另有 {truncated} 条未展示，可缩小关键词或分页查询。")
+
+    return "\n".join(lines)
+
+
+def _fmt_time_ms(ms) -> str:
+    try:
+        from datetime import datetime
+        return datetime.fromtimestamp(int(ms) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return str(ms)
+
+
+def _extract_record_segments(calendar: dict) -> list:
+    if not isinstance(calendar, dict):
+        return []
+    data = calendar.get("data")
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    return []
+
+
+def _format_record_segments_lines(segments: list, limit: int = 20) -> list[str]:
+    lines: list[str] = []
+    for i, seg in enumerate(segments[:limit], 1):
+        start = seg.get("startTime") or seg.get("start_time")
+        end = seg.get("endTime") or seg.get("end_time")
+        dur = seg.get("time") or seg.get("duration") or "-"
+        rec = "（录制中）" if seg.get("recording") else ""
+        lines.append(f"{i}. {_fmt_time_ms(start)} ~ {_fmt_time_ms(end)}  时长 {dur}s{rec}")
+    if len(segments) > limit:
+        lines.append(f"\n> 另有 {len(segments) - limit} 条片段未展示")
+    return lines
+
+
+def _user_wants_live_preview(msg: str) -> bool:
+    msg = msg or ""
+    if any(k in msg for k in ("录像", "回放", "片段", "日历")):
+        return False
+    if any(k in msg for k in ("直播", "预览", "实时")):
+        return True
+    if "播放" in msg and any(k in msg for k in ("视频", "直播", "预览", "设备", "相机", "摄像机")):
+        return True
+    if "打开" in msg and any(k in msg for k in ("直播", "预览", "视频", "设备", "相机", "摄像机")):
+        return True
+    return False
+
+
+def _build_live_meta_from_result(result: dict, dev_name: str) -> dict:
+    channel = result.get("channel") or {}
+    return {
+        "title": _format_device_channel_title(result, dev_name),
+        "channelUuid": result.get("channel_uuid") or channel.get("uuid") or channel.get("channelUuid") or "",
+        "app": result.get("app") or channel.get("app") or "",
+        "stream": result.get("stream") or channel.get("stream") or channel.get("uuid") or "",
+        "httpFlv": result.get("live_http_flv") or result.get("http_flv") or "",
+        "wsFlv": result.get("live_ws_flv") or result.get("ws_flv") or "",
+    }
+
+
+def _format_device_channel_title(result: dict, default_name: str = "摄像机") -> str:
+    device = result.get("device") or {}
+    channel = result.get("channel") or {}
+    dev_name = (
+        device.get("device_name") or device.get("deviceName")
+        or result.get("camera_name") or default_name
+    )
+    ch_name = channel.get("channelName") or channel.get("channel_name") or ""
+    if ch_name and ch_name not in dev_name:
+        return f"{dev_name}（{ch_name}）"
+    return dev_name
+
+
+def _append_live_preview_block(lines: list[str], live_meta: dict) -> None:
+    if not (live_meta.get("httpFlv") or live_meta.get("wsFlv")):
+        return
+    lines.append(
+        "\n<!-- xiaoke-live:"
+        + json.dumps(live_meta, ensure_ascii=False)
+        + " -->"
+    )
+    lines.append("\n点击下方「打开直播」按钮预览实时画面。")
+
+
+def _format_video_camera_overview_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    if not result.get("matched"):
+        return result.get("message") or f"未找到摄像机「{result.get('camera_name', '')}」"
+
+    device = result.get("device") or {}
+    channel = result.get("channel") or {}
+    dev_name = (
+        device.get("device_name") or device.get("deviceName")
+        or result.get("camera_name") or "未知设备"
+    )
+    dev_ip = device.get("device_ip") or device.get("deviceIp") or ""
+    ch_name = channel.get("channelName") or channel.get("channel_name") or ""
+
+    focus_record = any(k in (user_message or "") for k in ("录像", "回放", "片段", "日历"))
+
+    lines: list[str] = []
+    if focus_record:
+        lines.append(f"## {dev_name} — 今日录像")
+    else:
+        lines.append(f"## {dev_name} — 设备与录像概览")
+
+    if dev_ip:
+        lines.append(f"**设备 IP**：{dev_ip}")
+    if ch_name:
+        lines.append(f"**通道**：{ch_name}")
+
+    rs_label = result.get("record_status_label")
+    if rs_label:
+        lines.append(f"**录像状态**：{rs_label}")
+
+    cal = result.get("record_calendar_today") or {}
+    segments = _extract_record_segments(cal)
+    seg_count = result.get("record_segment_count_today")
+    if seg_count is None:
+        seg_count = len(segments)
+    has_today = result.get("has_record_today")
+
+    if err := result.get("record_calendar_error"):
+        lines.append(f"\n⚠️ 今日录像查询失败：{err}")
+    elif has_today or (seg_count and int(seg_count) > 0):
+        lines.append(f"\n### 今日录像片段（共 **{seg_count}** 条）")
+        lines.extend(_format_record_segments_lines(segments))
+    elif result.get("recording_in_progress"):
+        lines.append("\n今日录像正在写入中，片段可能尚未完整落盘。")
+    else:
+        lines.append("\n今日暂无录像片段记录。")
+
+    if flv := result.get("live_http_flv"):
+        lines.append(f"\n**直播 FLV**：`{flv}`")
+    if pb := result.get("playback_http_flv"):
+        lines.append(f"**回放 FLV**：`{pb}`")
+
+    if result.get("compress_enabled"):
+        tasks = result.get("compress_tasks") or []
+        lines.append(f"\n**视频压缩**：已启用（关联 {len(tasks)} 个任务）")
+
+    if _user_wants_live_preview(user_message) and result.get("live_http_flv"):
+        live_meta = _build_live_meta_from_result(result, dev_name)
+        channel = result.get("channel") or {}
+        if not live_meta.get("app"):
+            live_meta["app"] = channel.get("app") or ""
+        if not live_meta.get("stream"):
+            live_meta["stream"] = channel.get("stream") or ""
+        _append_live_preview_block(lines, live_meta)
+
+    return "\n".join(lines)
+
+
+def _format_record_day_calendar_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    date = result.get("date") or "今天"
+    channel_uuid = result.get("channel_uuid") or ""
+    cal = result.get("calendar") or {}
+    segments = _extract_record_segments(cal)
+    count = result.get("segment_count")
+    if count is None:
+        count = len(segments)
+
+    lines = [f"## 录像日历（{date}）"]
+    if channel_uuid:
+        lines.append(f"**通道 UUID**：{channel_uuid}")
+    lines.append(f"**片段数**：**{count}** 条")
+
+    if segments:
+        lines.append("\n### 片段列表")
+        lines.extend(_format_record_segments_lines(segments))
+    elif result.get("recording_in_progress"):
+        lines.append("\n该日录像正在写入中。")
+    else:
+        lines.append("\n该日暂无录像片段。")
+    return "\n".join(lines)
+
+
+def _format_video_record_segments_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    segments = result.get("segments") or result.get("data") or []
+    if not isinstance(segments, list):
+        segments = []
+    total = result.get("total")
+    if total is None:
+        total = len(segments)
+
+    lines = [f"## 录像片段查询结果", f"共 **{total}** 条片段"]
+    if segments:
+        lines.append("\n### 片段列表")
+        lines.extend(_format_record_segments_lines(segments))
+    else:
+        lines.append("\n该时间范围内暂无录像片段。")
+    return "\n".join(lines)
+
+
+def _format_video_play_record_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    if not result.get("matched"):
+        return result.get("message") or "录像回放启动失败，请确认该时间点是否有录像。"
+
+    title = _format_device_channel_title(result, "摄像机")
+    play_at = result.get("play_at") or ""
+    channel = result.get("channel") or {}
+    ch_name = channel.get("channelName") or channel.get("channel_name") or ""
+
+    lines = [
+        f"## {title} 录像回放",
+        f"**起始时间**：{play_at}",
+    ]
+    if ch_name:
+        lines.append(f"**通道**：{ch_name}")
+    seg_count = result.get("record_segment_count")
+    if seg_count is not None:
+        lines.append(f"**当日录像片段数**：{seg_count}")
+
+    playback_meta = {
+        "title": title,
+        "playAtMs": result.get("play_at_ms"),
+        "channelUuid": result.get("channel_uuid") or "",
+        "recordType": int(result.get("record_type") or 1),
+        "playDate": result.get("play_date") or "",
+        "timeSegments": result.get("time_segments") or [],
+        "speed": int(result.get("speed") or 1),
+    }
+    if playback_meta["channelUuid"]:
+        lines.append(
+            "\n<!-- xiaoke-playback:"
+            + json.dumps(playback_meta, ensure_ascii=False)
+            + " -->"
+        )
+        lines.append("\n点击下方「播放录像」按钮打开播放器，可在时间轴上选点、快进或切换片段。")
+    else:
+        lines.append("\n未获取到有效通道，请检查摄像机名称。")
+
+    return "\n".join(lines)
+
+
+def _format_video_live_play_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    if not result.get("matched"):
+        return result.get("message") or f"未找到摄像机「{result.get('camera_name', '')}」"
+
+    title = _format_device_channel_title(result, "摄像机")
+    channel = result.get("channel") or {}
+    ch_name = channel.get("channelName") or channel.get("channel_name") or ""
+
+    lines = [f"## {title} 实时预览"]
+    if ch_name:
+        lines.append(f"**通道**：{ch_name}")
+    live_meta = _build_live_meta_from_result(result, title)
+    _append_live_preview_block(lines, live_meta)
+    if not (live_meta.get("httpFlv") or live_meta.get("wsFlv")):
+        lines.append("\n未获取到有效直播地址，请确认设备在线且通道已推流。")
+
+    return "\n".join(lines)
+
+
+_STRUCTURED_MCP_FORMATTERS = {
+    "video_camera_overview": _format_video_camera_overview_response,
+    "record_day_calendar": _format_record_day_calendar_response,
+    "video_record_find_segments": _format_video_record_segments_response,
+    "video_play_record": _format_video_play_record_response,
+    "video_record_start_playback": _format_video_play_record_response,
+    "video_live_play": _format_video_live_play_response,
+}
+
+
+def _format_structured_mcp_response(user_message: str, tool_result: dict) -> str | None:
+    fn = _STRUCTURED_MCP_FORMATTERS.get(tool_result.get("tool") or "")
+    if fn is None:
+        return None
+    return fn(user_message, tool_result)
+
+
 def _generate_summary_response(user_message: str, tool_results: list) -> dict:
     """
     当数据量过大时，对原始数据做多维度统计分析，生成结构化摘要 + 可视化图表
@@ -849,8 +1305,15 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
                     chart_image_base64 = result['image_base64']
 
         else:
-            # 其他工具，简单提示
-            response_parts.append(f"✅ {tool_name} 执行完成")
+            struct_text = _format_structured_mcp_response(user_message, r)
+            if struct_text:
+                response_parts.append(struct_text)
+            else:
+                list_text = _format_simple_list_tool_response(user_message, r)
+                if list_text:
+                    response_parts.append(list_text)
+                else:
+                    response_parts.append(f"✅ {tool_name} 执行完成")
 
     final_response = "\n\n---\n\n".join(response_parts)
 
@@ -967,6 +1430,19 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
         emit_token_chunked(_text)
         return {"final_response": _text}
 
+    # MCP 结构化/列表类工具：直接输出，避免误入告警摘要路径后只显示「执行完成」
+    if len(tool_results) == 1 and tool_results[0].get("success"):
+        _struct_text = _format_structured_mcp_response(user_message, tool_results[0])
+        if _struct_text:
+            emit_status("answering", "正在组织回答…")
+            emit_token_chunked(_struct_text)
+            return {"final_response": _struct_text}
+        _list_text = _format_simple_list_tool_response(user_message, tool_results[0])
+        if _list_text:
+            emit_status("answering", "正在组织回答…")
+            emit_token_chunked(_list_text)
+            return {"final_response": _list_text}
+
     # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
     # 绝不能让下游 LLM 凭空编造无关告警（修复"打电话/跳舞也返回数据"的幻觉问题）。
     _ev_results = [
@@ -1054,7 +1530,22 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     # 2. events 数组超过 5 条
     # 3. 聚合统计结果（让聚合也有友好的结构化呈现 + 图表，而非 LLM 一句话）
     # 4. 工具结果 JSON 超过 4000 字符（保守阈值，远低于 8192 tokens）
-    should_use_summary = has_large_data or has_event_array or has_aggregate or len(tools_summary) > 4000
+    # 注：纯列表类 MCP 工具已在上方专用分支处理，不在此走告警摘要路径
+    _single_list_tool = (
+        len(tool_results) == 1
+        and tool_results[0].get("success")
+        and tool_results[0].get("tool") in _LIST_TOOL_SPECS
+    )
+    _single_structured_tool = (
+        len(tool_results) == 1
+        and tool_results[0].get("success")
+        and tool_results[0].get("tool") in _STRUCTURED_MCP_FORMATTERS
+    )
+    should_use_summary = (
+        not _single_list_tool
+        and not _single_structured_tool
+        and (has_large_data or has_event_array or has_aggregate or len(tools_summary) > 4000)
+    )
     if should_use_summary:
         logger.info(
             f"[Formatter] 触发结构化摘要路径 "

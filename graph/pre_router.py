@@ -4,7 +4,8 @@
 1. 规则极度保守，宁可漏判也不误判（误判会破坏用户体验）
 2. 闲聊用严格正则（全字匹配），避免"你好，查询告警"被误判
 3. 知识库需同时满足：有 KB 关键词 + 无告警关键词
-4. 未命中时无任何副作用，完全走原 planner 逻辑
+4. 录像/告警/设备等复杂意图统一走 Planner，由大模型解析
+5. 未命中时无任何副作用，完全走原 planner 逻辑
 """
 import re
 from loguru import logger
@@ -71,7 +72,7 @@ def pre_route(user_message: str) -> dict | None:
             }],
         }
 
-    # 3. 其他情况走完整 planner
+    # 3. 其他情况走完整 planner（录像/告警/设备等由大模型解析）
     return None
 
 

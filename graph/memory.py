@@ -132,28 +132,42 @@ def _msg_text(msg: BaseMessage) -> str:
     return _strip_heavy(str(content or ""))
 
 
-def build_history_context(messages: List[BaseMessage], *, exclude_last_human: bool = True) -> str:
-    """把累计的 messages 渲染成喂给 LLM 的"对话历史"文本块（兼容旧接口）
-
-    Args:
-        messages: state['messages']，按时间顺序的 Human/AI 交替消息。
-        exclude_last_human: 调用通常发生在"本轮用户消息已 append 进 messages"之后，
-            最后一条就是当前问题本身，不应作为"历史"重复喂入 → 默认剔除末尾的 Human。
-
-    Returns:
-        多行字符串（含"用户:/助手:"前缀）；无历史时返回空串。
-        已做：滑动窗口（最近 MAX_HISTORY_TURNS 轮）、单条截断、总字符上限。
-
-    Note: 此函数保持同步接口，供现有代码调用。智能摘要功能在异步上下文中使用。
-    """
+def build_history_context(
+    messages: List[BaseMessage],
+    *,
+    exclude_last_human: bool = True,
+    max_turns: int | None = None,
+    max_chars: int | None = None,
+    per_message_chars: int | None = None,
+) -> str:
+    """把累计的 messages 渲染成喂给 LLM 的"对话历史"文本块（兼容旧接口）"""
     return build_history_context_with_summary(
-        messages, exclude_last_human=exclude_last_human, use_summary=False
+        messages,
+        exclude_last_human=exclude_last_human,
+        use_summary=False,
+        max_turns=max_turns,
+        max_chars=max_chars,
+        per_message_chars=per_message_chars,
     )
 
 
-def history_prompt_block(messages: List[BaseMessage]) -> str:
-    """构建可直接拼进 system/user prompt 的"历史上下文"段落；无历史返回空串。"""
-    ctx = build_history_context(messages)
+def history_prompt_block(
+    messages: List[BaseMessage],
+    *,
+    max_turns: int | None = None,
+    max_chars: int | None = None,
+    per_message_chars: int | None = None,
+) -> str:
+    """构建可直接拼进 prompt 的历史段落；无历史返回空串。
+
+    planner 等 token 紧张场景可传入更小的 max_turns / max_chars。
+    """
+    ctx = build_history_context(
+        messages,
+        max_turns=max_turns,
+        max_chars=max_chars,
+        per_message_chars=per_message_chars,
+    )
     if not ctx:
         return ""
     return (
@@ -236,7 +250,10 @@ def build_history_context_with_summary(
     messages: List[BaseMessage],
     *,
     exclude_last_human: bool = True,
-    use_summary: bool = True
+    use_summary: bool = True,
+    max_turns: int | None = None,
+    max_chars: int | None = None,
+    per_message_chars: int | None = None,
 ) -> str:
     """构建历史上下文，支持智能摘要
 
@@ -281,13 +298,24 @@ def build_history_context_with_summary(
         msgs = recent_msgs
 
     # 使用原有逻辑构建上下文
-    return _build_context_from_messages(msgs)
+    return _build_context_from_messages(
+        msgs,
+        max_turns=max_turns or MAX_HISTORY_TURNS,
+        max_chars=max_chars or MAX_HISTORY_CHARS,
+        per_message_chars=per_message_chars or PER_MESSAGE_CHARS,
+    )
 
 
-def _build_context_from_messages(msgs: List[BaseMessage]) -> str:
+def _build_context_from_messages(
+    msgs: List[BaseMessage],
+    *,
+    max_turns: int = MAX_HISTORY_TURNS,
+    max_chars: int = MAX_HISTORY_CHARS,
+    per_message_chars: int = PER_MESSAGE_CHARS,
+) -> str:
     """从消息列表构建上下文文本（内部辅助函数）"""
     # 滑动窗口：最近 N 轮 ≈ 最近 2N 条消息
-    msgs = msgs[-(MAX_HISTORY_TURNS * 2):]
+    msgs = msgs[-(max_turns * 2):]
 
     # 逐条渲染（从新到旧累加，受总字符上限约束），最后反转回时间正序
     rendered: list[str] = []
@@ -302,10 +330,10 @@ def _build_context_from_messages(msgs: List[BaseMessage]) -> str:
         text = _msg_text(msg)
         if not text:
             continue
-        if len(text) > PER_MESSAGE_CHARS:
-            text = text[:PER_MESSAGE_CHARS] + "…（略）"
+        if len(text) > per_message_chars:
+            text = text[:per_message_chars] + "…（略）"
         line = f"{role}：{text}"
-        if total + len(line) > MAX_HISTORY_CHARS:
+        if total + len(line) > max_chars:
             break
         rendered.append(line)
         total += len(line)

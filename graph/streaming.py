@@ -128,9 +128,11 @@ TOOL_LABELS: Dict[str, str] = {
     # === 视频设备与录像 (video_*) ===
     "video_device_list": "查询视频设备",
     "video_device_detail": "获取设备详情",
-    "video_resolve_camera_channel": "解析摄像机通道",
+    "video_camera_overview": "查询摄像机概览",
     "video_record_find_segments": "查询录像片段",
     "video_record_start_playback": "启动录像回放",
+    "video_play_record": "按名称播放录像",
+    "video_live_play": "打开实时直播预览",
     "video_live_play_urls": "获取实时播放地址",
 
     # === 系统管理 (system_*) ===
