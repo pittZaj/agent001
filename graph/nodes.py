@@ -130,102 +130,16 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     from utils.llm_pool import get_llm
     llm = get_llm(role="planner", temperature=0.1)
 
-    # 注入当前真实日期时间（关键：LLM 训练数据日期滞后，必须显式告知，否则相对时间会算错年份）
-    from datetime import datetime, timedelta
-    _now = datetime.now()
-    _today = _now.strftime("%Y-%m-%d")
-    _now_str = _now.strftime("%Y-%m-%d %H:%M:%S")
-    _yesterday = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
-    _7days_ago = (_now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    _30days_ago = (_now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-    _2hours_ago = (_now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    # T2：提示词分层 - 使用独立模块构建 system prompt
+    from datetime import datetime
+    from graph.planner_prompt import build_planner_system_prompt
 
-    system_prompt = f"""你是 KSIpms 综合管理平台的智能任务规划助手。请根据用户请求，将其拆解为可执行的子任务序列。
-
-# ⏰ 当前真实时间（务必以此为准计算时间范围，不要使用你训练数据中的日期！）
-- **现在**：{_now_str}
-- **今天**：{_today}
-- **昨天**：{_yesterday}
-- 最近 2 小时起点：{_2hours_ago}
-- 最近 7 天/一周起点：{_7days_ago}
-- 最近 30 天/一个月起点：{_30days_ago}
-
-**时间筛选规则（重要）**：
-- "今天" → time_start="{_today} 00:00:00", time_end="{_today} 23:59:59"
-- "昨天" → time_start="{_yesterday} 00:00:00", time_end="{_yesterday} 23:59:59"
-- "最近N小时/天/周/月" → time_start=对应起点, time_end="{_now_str}"
-- ⚠️ **"查最近N条"是数量限制（pagesize），不是时间筛选！** 不要加 time_start/time_end。
-- ⚠️ **用户没有明确说时间范围时（如"查询未戴安全帽的告警""查询吸烟告警"），绝对不要自己加 time_start/time_end！**
-  默认查全量历史数据。只有用户**显式提到**今天/昨天/最近N天/某日期时才加时间筛选。
-- 年份必须是 {_now.year} 年，绝不能用 2024/2025 等过去年份
-
-{catalog_block}
-
-# 可用工具（已对接真实平台 192.168.1.199:6620 MCP Server）
-{tools_text}
-
-# 工具选择指引（重要）
-- 查 AI 视觉算法告警（越界/离岗/未戴安全帽/吸烟等）→ 用 `ai_event_*`，**不是** `system_alarm_*`
-- 查服务器/磁盘/服务基础设施告警 → 用 `system_alarm_*`
-- AI 告警的复判/回写：先 `vlm_judge_alarm`（输入 alarm_uuid），再 `update_alarm_status`（verdict 自动映射 review_status）
-- 统计/趋势分析 → 用 `aggregate_alarms`（消费 ai_event_list）+ `visualize_alarms`（生成图表）
-- 查规章制度/处罚标准 → 用 `kb_regulation`
-- 查录像片段：用 `fetch_alarm_context`（输入 alarm_uuid，自动解析摄像头与时间窗）
-- 查 AI 摄像机/视频设备列表 → 用 `video_device_list`，**不要**用 system_role_camera_permission（那是按角色查权限）
-- 仅闲聊、常识问答、介绍平台能力等**无需查库/调工具**的问题 → 用 `stream_chat`（args 必须为 `{{}}`，**禁止**写 text，由系统流式生成）
-- 需要返回**固定提示语**（如平台不支持某告警类型）→ 用 `direct_response` 并在 args.text 中写完整文案
-
-# 真实平台关键字段（与旧版有差异，务必对齐）
-- AI 事件主键：`uuid`（不是 alarm_uuid）→ ai_event_* 工具入参用 `event_uuid`
-- 时间字段：`created_at`，格式 "yyyy-MM-dd HH:mm:ss"；筛选用 `time_start`/`time_end`
-- 告警类型：`event_type`（算法编码，**必须取自上方"平台支持的 AI 告警类型"权威清单**）/ `event_name`（中文，如"未戴安全帽告警"）
-- 告警等级：`level`，可选值 red（红色/严重/紧急）、orange（橙色/重要）、yellow（黄色/一般）、blue（蓝色/提示）
-  · 用户说"紧急""严重""红色"告警 → 用 `level=red`
-  · 用户说"重要""橙色"告警 → 用 `level=orange`
-  · 用户说"一般""黄色"告警 → 用 `level=yellow`
-  · 用户说"提示""蓝色"告警 → 用 `level=blue`
-- 摄像机：`camera_uuid` / `camera_name`
-- 复核状态 review_status：1=待复核 2=已复核 3=已完成 5=误报
-
-# 步骤间传参
-- 引用前序步骤输出：`{{{{step_N.field_name}}}}`，支持嵌套如 `{{{{step_0.events.0.uuid}}}}`
-- 纯引用（整个值就是一个 {{{{...}}}}）会保留原始类型（list/dict 不会被字符串化）
-
-# 输出格式
-仅返回 JSON 数组，不要包裹任何其他文字：
-[
-  {{"task": "ai_event_list", "args": {{"pageno": 1, "pagesize": 5}}}},
-  {{"task": "vlm_judge_alarm", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}"}}}},
-  {{"task": "update_alarm_status", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}", "verdict": "{{{{step_1.verdict}}}}", "note": "VLM 自动复判"}}}}
-]
-
-# 常见任务模板（语义区分：统计全量 vs 查看样本/最近N条）
-- "统计每种告警类型数量并画柱状图"（统计全量，按用户指定图表类型）：
-  [{{"task":"aggregate_alarms","args":{{"group_by":"event_name"}}}},
-   {{"task":"visualize_alarms","args":{{"data":"{{{{step_0}}}}","chart_type":"<用户指定:bar/line/pie>","title":"告警类型分布"}}}}]
-- "复判告警 <UUID> 并回写状态"：
-  [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
-   {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
-- "查最近/前 N 条 AI 告警"（⚠️ 重要：这是"查看样本"而非"统计全量"）：
-  · 传 pagesize=N（如 5/10/20），系统会**只返回 N 条**（不会自动拉全量）
-  · 注意：MCP ai_event_list 默认返回的是数据库前 N 行，不一定是"最近"N 行
-    （真实平台的 ai_event_list 工具**不支持排序参数**，这是已知限制）
-  · 示例：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":5}}}}]
-- "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间、无数量限定）：
-  · 不传 pagesize（或传大值如 10000），系统自动分页拉全量并统计
-  · [{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]
-- "查紧急的未戴安全帽告警"（⚠️ 多个筛选条件组合在**同一个查询**中）：
-  · [{{"task":"ai_event_list","args":{{"event_type":"ET03007","level":"red"}}}}]
-  · **不要**拆成多个独立查询！筛选条件应该叠加在一起（AND 逻辑）
-- "查今天/昨天/某时间范围的 AI 告警"（按时间，统计全量）：
-  · 不传 pagesize，系统会自动分页拉全量并生成统计摘要
-  · [{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]
-
-# 约束
-1. 只能使用上述列出的工具，不要编造
-2. 参数名必须严格匹配工具 schema（如 ai_event_* 用 event_uuid，不是 alarm_uuid）
-3. 无法完成且需要固定文案时返回 `[{{"task":"direct_response","args":{{"text":"..."}}}}]`；闲聊/常识问答返回 `[{{"task":"stream_chat","args":{{}}}}]`
-"""
+    system_prompt = build_planner_system_prompt(
+        tools_text=tools_text,
+        catalog_text=catalog_text,
+        catalog_names=catalog_names,
+        now=datetime.now()
+    )
 
     messages = [
         SystemMessage(content=system_prompt),
