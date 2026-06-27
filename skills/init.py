@@ -59,10 +59,11 @@ async def init_skill_registry():
 
     注册顺序：
         1. 本地基础 Skills（direct_response）
-        2. MCP Server 连接 + 19 个真实工具动态注册
-        3. 复判子图（VLM）
-        4. 告警业务 Skills（聚合/可视化/回写，消费 MCP 输出）
-        5. 知识库子图（RAG）
+        2. 复判子图（VLM）
+        3. 告警业务 Skills（聚合/可视化/回写，消费 MCP 输出）
+        4. 知识库子图（RAG）
+
+    MCP 工具由 ``skills.mcp_watcher`` 后台监听，连接成功后动态注册，不阻塞启动。
     """
     logger.info("初始化 Skill Registry（真实平台对接）...")
 
@@ -71,26 +72,15 @@ async def init_skill_registry():
     # 1. 本地基础 Skills
     register_local_skills(registry)
 
-    # 2. 连接真实 MCP Server，动态注册 19 个工具
-    from mcp_adapter.client import get_mcp_client
-    mcp_client = await get_mcp_client()
-    registry.set_mcp_client(mcp_client)
-
-    if mcp_client.enabled and mcp_client.list_servers():
-        from skills.mcp_skills import register_mcp_skills
-        await register_mcp_skills(registry, mcp_client)
-    else:
-        logger.warning("MCP Client 未启用或未连接，跳过 MCP 工具注册")
-
-    # 3. 复判子图（VLM 多模态告警复判）
+    # 2. 复判子图（VLM 多模态告警复判）
     from skills.vlm_judge_subgraph import register_vlm_judge_skill
     register_vlm_judge_skill(registry)
 
-    # 4. 告警业务 Skills（已改造为消费 MCP 输出）
+    # 3. 告警业务 Skills（已改造为消费 MCP 输出）
     from skills.alarm_skills import register_alarm_skills
     register_alarm_skills(registry)
 
-    # 5. 知识库检索 Skill（RAG，与平台对接独立）
+    # 4. 知识库检索 Skill（RAG，与平台对接独立）
     from skills.kb.skill import register_kb_skill
     register_kb_skill(registry)
 
