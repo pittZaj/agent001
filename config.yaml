@@ -35,13 +35,27 @@ mcp:
     backoff_max: 4.0
     max_attempts: 3
   reconnect:
-    connect_timeout: 10
-    health_interval: 30
-    interval: 10
-    max_interval: 60
-  timeout: 30
-  timeout_call: 30
-  transport: http
+    interval: 10               # 首次重试间隔（秒）
+    max_interval: 60           # 退避上限（秒）
+    health_interval: 30        # 已连接时的健康检查间隔（秒）
+    connect_timeout: 10        # 单次连接尝试超时（秒）
+
+# 知识库（MySQL 元数据 + Qdrant 向量，由 KSAgent 统一管理）
+kb:
+  qdrant_host: "localhost"
+  qdrant_port: 6333
+  collection_name: "safety_regulations"
+  upload_dir: "/var/lib/ksom/var/lib/LangGraph/agent/data/kb_uploads"
+  source_dir: "/var/lib/ksom/var/lib/LangGraph/agent/data/kb_sources"
+  embedding_model_path: "/var/lib/ksom/var/lib/LangGraph/VLLM/BGE-M3"
+  reranker_model_path: "/var/lib/ksom/var/lib/LangGraph/VLLM/bge-reranker-v2-m3"
+  device: "cuda:0"
+  chunk_size: 300
+  chunk_overlap: 50
+  # 旧版 .doc 解析用 NLTK 数据离线目录（可选；未设置则尝试 ~/nltk_data 或联网下载）
+  # nltk_data_dir: "/var/lib/ksom/var/lib/LangGraph/agent/data/nltk_data"
+
+# RAG 知识库（对话检索开关，阶段 3 接入）
 rag:
   dataset_id: safety_regulations
   enabled: false

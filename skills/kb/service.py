@@ -25,12 +25,12 @@ from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue,
 )
-from langchain_community.document_loaders import UnstructuredFileLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 from sentence_transformers import SentenceTransformer
 from FlagEmbedding import FlagReranker
 
 from .config import KBConfig, get_kb_config, ChunkStrategy, RetrievalMode
+from .document_loader import load_document_text
 from .mysql_store import get_mysql_store
 from .source_files import (
     archive_source,
@@ -167,13 +167,8 @@ class KnowledgeBaseService:
         size = chunk_size if chunk_size is not None else self.config.chunk_size
         overlap = chunk_overlap if chunk_overlap is not None else self.config.chunk_overlap
 
-        # 1. 解析
-        loader = UnstructuredFileLoader(file_path, mode="single")
-        docs = loader.load()
-        if not docs or not docs[0].page_content.strip():
-            raise ValueError(f"文档解析为空: {file_path}")
-
-        full_text = docs[0].page_content.strip()
+        # 1. 解析（PDF/DOCX/TXT/MD 走轻量库，不依赖 NLTK）
+        full_text = load_document_text(file_path)
 
         # 2. 分块（根据策略）
         if strategy == ChunkStrategy.BY_SEPARATOR:
