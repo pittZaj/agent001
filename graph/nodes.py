@@ -13,6 +13,20 @@ from graph.streaming import emit_status, stream_llm, tool_label, emit_token_chun
 from graph.memory import history_prompt_block
 
 
+# T1：Plan 的 JSON Schema（guided_json 约束，确保 planner 必出合法任务数组）
+PLAN_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string"},
+            "args": {"type": "object"},
+        },
+        "required": ["task", "args"],
+    },
+}
+
+
 def _format_skills_grouped(skills) -> str:
     """按真实平台分类组织工具描述（ai_*/video_*/system_* / 本地分析 / 子图）"""
     groups: dict[str, list] = {
@@ -220,31 +234,51 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         ]
 
     try:
-        response = llm.invoke(messages)
-        content = response.content
+        # T1：结构化输出（guided_json）—— 让 LLM 必出合法 JSON 数组，省去正则解析
+        use_guided = CONFIG["llm"].get("guided_json_enabled", True)
 
-        # 解析 JSON
-        import json
-        import re
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
-        if json_match:
-            plan = json.loads(json_match.group())
-            logger.info(f"[Planner] 生成计划: {plan}")
-            _tasks = [t.get("task", "") for t in plan]
-            if _tasks and _tasks != ["direct_response"] and _tasks != ["stream_chat"]:
-                emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
-                            + "、".join(tool_label(t) for t in _tasks))
-            return {
-                "plan": [{"task": t["task"], "args": t["args"], "status": "pending"} for t in plan],
-                "current_task_idx": 0,
-            }
-        else:
-            # 降级：直接回复
-            logger.warning(f"[Planner] 无法解析计划，降级为直接回复")
-            return {
-                "plan": [{"task": "direct_response", "args": {"text": content}, "status": "pending"}],
-                "current_task_idx": 0,
-            }
+        if use_guided:
+            try:
+                # 方案 B（推荐）：bind extra_body 生成绑定副本，不污染单例缓存
+                plan_llm = llm.bind(extra_body={"guided_json": PLAN_SCHEMA})
+                response = plan_llm.invoke(messages)
+                content = response.content
+
+                # guided_json 下应直接是合法 JSON 数组
+                plan = json.loads(content)
+                logger.info(f"[Planner] 生成计划（guided_json）: {plan}")
+
+            except Exception as e:
+                logger.warning(f"[Planner] guided_json 失败，回退正则解析: {e}")
+                use_guided = False
+
+        # 正则路径兜底（开关关闭 或 guided_json 失败时走此路径）
+        if not use_guided:
+            response = llm.invoke(messages)
+            content = response.content
+
+            # 解析 JSON（原逻辑完全保留）
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                plan = json.loads(json_match.group())
+                logger.info(f"[Planner] 生成计划（正则）: {plan}")
+            else:
+                # 降级：直接回复（友好化见 T4，此处先保留原逻辑）
+                logger.warning(f"[Planner] 无法解析计划，降级为直接回复")
+                return {
+                    "plan": [{"task": "direct_response", "args": {"text": content}, "status": "pending"}],
+                    "current_task_idx": 0,
+                }
+
+        # 统一后处理（两条路径汇合）
+        _tasks = [t.get("task", "") for t in plan]
+        if _tasks and _tasks != ["direct_response"] and _tasks != ["stream_chat"]:
+            emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
+                        + "、".join(tool_label(t) for t in _tasks))
+        return {
+            "plan": [{"task": t["task"], "args": t["args"], "status": "pending"} for t in plan],
+            "current_task_idx": 0,
+        }
 
     except Exception as e:
         logger.error(f"[Planner] 规划失败: {e}")

@@ -1,84 +1,56 @@
-# KSAgent 配置文件
-
-# LLM 配置（Qwen3-VL-4B vLLM 服务）
+database:
+  echo: false
+  enabled: true
+  pool_size: 10
+  url: mysql+pymysql://root:keshuzhineng@127.0.0.1:6669/ksom
+kb:
+  chunk_overlap: 50
+  chunk_size: 300
+  collection_name: safety_regulations
+  device: cuda:0
+  embedding_model_path: /mnt/data/clip/LangGraph/VLLM/BGE-M3
+  qdrant_host: localhost
+  qdrant_port: 6333
+  reranker_model_path: /mnt/data/clip/LangGraph/VLLM/bge-reranker-v2-m3
+  source_dir: /mnt/data/clip/LangGraph/agent/data/kb_sources
+  upload_dir: /mnt/data/clip/LangGraph/agent/data/kb_uploads
 llm:
-  base_url: "http://127.0.0.1:8004/v1"
-  model: "Qwen3-VL-4B-Instruct-FP8"
-  api_key: "EMPTY"
-  temperature: 0.2
+  api_key: EMPTY
+  base_url: http://127.0.0.1:8004/v1
+  guided_json_enabled: true
   max_tokens: 2048
+  model: Qwen3-VL-4B-Instruct-FP8
+  temperature: 0.2
   timeout: 60
-
-# MCP 配置（ksipms 综合管理平台 - 真实 MCP Server）
-# 阶段 2.5.1：HTTP 直连同事部署的 ksipms-mcp（19 个工具：ai_* / video_* / system_*）
-# 鉴权：MCP Server 内部已处理后端鉴权，Python 侧无需传 AK/SK
+logging:
+  format: '<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level>
+    | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>'
+  level: INFO
 mcp:
   enabled: true
-  transport: http              # http | stdio（http 直连远程 MCP Server）
-  endpoint: "http://127.0.0.1:6620/mcp"
-  # OM 静态资源根（用于 ai_event_*.img_path 等相对路径转绝对 URL）
-  om_base_url: "http://127.0.0.1:6611"
-  timeout: 30
-  # 单次工具调用超时（区别于连接 timeout，T5 引入）
-  # 超过此值视为瞬时错误，会触发重试
-  timeout_call: 30
-  # 调用重试配置（T5 引入：瞬时错误指数退避重试）
+  endpoint: http://127.0.0.1:6620/mcp
+  om_base_url: http://127.0.0.1:6611
   retry:
-    max_attempts: 3            # 含首次，即重试 2 次（1 失败 → 2 → 3）
-    backoff_base: 0.5          # 秒，指数退避基数（0.5s, 1.0s, 2.0s ...）
-    backoff_max: 4.0           # 秒，单次最大退避（防止过长等待）
-
-# 知识库（MySQL 元数据 + Qdrant 向量，由 KSAgent 统一管理）
-kb:
-  qdrant_host: "localhost"
-  qdrant_port: 6333
-  collection_name: "safety_regulations"
-  upload_dir: "/mnt/data/clip/LangGraph/agent/data/kb_uploads"
-  source_dir: "/mnt/data/clip/LangGraph/agent/data/kb_sources"
-  embedding_model_path: "/mnt/data/clip/LangGraph/VLLM/BGE-M3"
-  reranker_model_path: "/mnt/data/clip/LangGraph/VLLM/bge-reranker-v2-m3"
-  device: "cuda:0"
-  chunk_size: 300
-  chunk_overlap: 50
-
-# RAG 知识库（对话检索开关，阶段 3 接入）
+    backoff_base: 0.5
+    backoff_max: 4.0
+    max_attempts: 3
+  timeout: 30
+  timeout_call: 30
+  transport: http
 rag:
+  dataset_id: safety_regulations
   enabled: false
-  ragflow_url: "http://ragflow.internal:8080"
-  dataset_id: "safety_regulations"
+  ragflow_url: http://ragflow.internal:8080
   top_k: 3
-
-# 数据库（知识库元数据：分组、文档索引；向量仍在 Qdrant）
-database:
-  enabled: true
-  url: "mysql+pymysql://root:keshuzhineng@127.0.0.1:6669/ksom"
-  # 也可显式指定（url 优先）:
-  # host: "127.0.0.1"
-  # port: 3306
-  # user: "ksagent"
-  # password: "password"
-  # name: "ksagent"
-  pool_size: 10
-  echo: false
-
-# Redis 配置（短期记忆持久化）
 redis:
-  enabled: true
-  addr: "192.168.1.90:6731"
-  password: ""
+  addr: 192.168.1.90:6731
   db: 0
-  # 记忆相关配置
-  key_prefix: "ksagent:memory:"
-  ttl: 2592000  # 30 天过期（秒）
-
-# FastAPI 服务
+  enabled: true
+  key_prefix: 'ksagent:memory:'
+  password: ''
+  ttl: 2592000
 server:
-  host: "0.0.0.0"
+  host: 0.0.0.0
+  log_level: info
   port: 8001
   reload: false
-  log_level: "info"
-
-# 日志
-logging:
-  level: "INFO"
-  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
