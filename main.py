@@ -77,6 +77,10 @@ async def lifespan(app: FastAPI):
 
     start_mcp_watcher()
 
+    # 后台预检 NLTK（仅 .doc 需要；不阻塞启动）
+    from skills.kb.document_loader import warmup_nltk_data
+    asyncio.get_running_loop().run_in_executor(None, warmup_nltk_data)
+
     # 预热：构建图
     get_graph()
     logger.info("LangGraph 图已就绪")

@@ -14,6 +14,8 @@ kb:
   reranker_model_path: /mnt/data/clip/LangGraph/VLLM/bge-reranker-v2-m3
   source_dir: /mnt/data/clip/LangGraph/agent/data/kb_sources
   upload_dir: /mnt/data/clip/LangGraph/agent/data/kb_uploads
+  # 旧版 .doc 解析用 NLTK 数据离线目录（可选；未设置则尝试 ~/nltk_data 或联网下载）
+  # nltk_data_dir: /mnt/data/clip/LangGraph/agent/data/nltk_data
 llm:
   api_key: EMPTY
   base_url: http://127.0.0.1:8004/v1
