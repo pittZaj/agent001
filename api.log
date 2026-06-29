@@ -92,3 +92,53 @@ INFO:     127.0.0.1:52468 - "GET /api/v1/sessions?user_id=admin HTTP/1.1" 200 OK
 2026-06-26 14:47:52.316 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
 2026-06-26 14:47:52.317 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
 INFO:     127.0.0.1:52468 - "GET /api/v1/sessions/sess_admin_d1e43e5700df HTTP/1.1" 200 OK
+2026-06-29 08:50:51.986 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 08:51:01.890 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_c43e13691cdd
+2026-06-29 08:51:01.890 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_80c39c5a59ca
+2026-06-29 08:51:01.892 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_kszn_4d38e002e164
+2026-06-29 08:51:01.896 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_142f40fe0f6f
+2026-06-29 08:51:01.897 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6e13de20f402
+2026-06-29 08:51:01.898 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_740447d343ca
+2026-06-29 08:51:01.898 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6788f361b103
+2026-06-29 08:51:01.899 | DEBUG    | graph.session_manager:list_sessions:80 - [SessionManager] 列出 8 个会话
+INFO:     127.0.0.1:7160 - "GET /api/v1/sessions?user_id=admin HTTP/1.1" 200 OK
+2026-06-29 08:51:01.995 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 08:51:01.997 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+INFO:     127.0.0.1:7160 - "GET /api/v1/sessions/sess_admin_d1e43e5700df HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36556 - "GET /health HTTP/1.1" 200 OK
+2026-06-29 10:31:20.604 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 10:31:20.605 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_c43e13691cdd
+2026-06-29 10:31:20.606 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_80c39c5a59ca
+2026-06-29 10:31:20.609 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_kszn_4d38e002e164
+2026-06-29 10:31:20.615 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_142f40fe0f6f
+2026-06-29 10:31:20.616 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6e13de20f402
+2026-06-29 10:31:20.617 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_740447d343ca
+2026-06-29 10:31:20.618 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6788f361b103
+2026-06-29 10:31:20.620 | DEBUG    | graph.session_manager:list_sessions:80 - [SessionManager] 列出 8 个会话
+INFO:     127.0.0.1:36556 - "GET /api/v1/sessions?user_id=__probe__ HTTP/1.1" 200 OK
+2026-06-29 16:24:13.395 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 16:24:23.653 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_c43e13691cdd
+2026-06-29 16:24:23.654 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_80c39c5a59ca
+2026-06-29 16:24:23.656 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_kszn_4d38e002e164
+2026-06-29 16:24:23.661 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_142f40fe0f6f
+2026-06-29 16:24:23.662 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6e13de20f402
+2026-06-29 16:24:23.663 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_740447d343ca
+2026-06-29 16:24:23.664 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6788f361b103
+2026-06-29 16:24:23.664 | DEBUG    | graph.session_manager:list_sessions:80 - [SessionManager] 列出 8 个会话
+INFO:     127.0.0.1:45840 - "GET /api/v1/sessions?user_id=admin HTTP/1.1" 200 OK
+2026-06-29 16:24:23.697 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 16:24:23.698 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+INFO:     127.0.0.1:45840 - "GET /api/v1/sessions/sess_admin_d1e43e5700df HTTP/1.1" 200 OK
+2026-06-29 16:27:49.901 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 16:27:49.902 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_c43e13691cdd
+2026-06-29 16:27:49.902 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_80c39c5a59ca
+2026-06-29 16:27:49.904 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_kszn_4d38e002e164
+2026-06-29 16:27:49.909 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_142f40fe0f6f
+2026-06-29 16:27:49.910 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6e13de20f402
+2026-06-29 16:27:49.911 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_740447d343ca
+2026-06-29 16:27:49.911 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_default_6788f361b103
+2026-06-29 16:27:49.912 | DEBUG    | graph.session_manager:list_sessions:80 - [SessionManager] 列出 8 个会话
+INFO:     127.0.0.1:25728 - "GET /api/v1/sessions?user_id=admin HTTP/1.1" 200 OK
+2026-06-29 16:27:50.062 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+2026-06-29 16:27:50.064 | DEBUG    | graph.redis_checkpoint:get:162 - [Memory] Checkpoint 已加载: ksagent:memory:sess_admin_d1e43e5700df
+INFO:     127.0.0.1:25728 - "GET /api/v1/sessions/sess_admin_d1e43e5700df HTTP/1.1" 200 OK

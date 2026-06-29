@@ -201,6 +201,39 @@ EVAL_CASES = [
         expect_args_contains={0: {"event_type": "ET03002"}, 1: {"event_type": "ET03007"}},
         tag="跨类型组合",
     ),
+
+    # ===== 13. T3 Few-shot 发散意图（措辞区别于上方用例，专测三类混淆边界） =====
+    # 这批用例随 T3「Few-shot 覆盖发散意图」补充，守护对比型 few-shot 的价值，
+    # 防止后续提示词改动重新引入"统计=单步""不支持类型瞎猜编码"等混淆。
+    EvalCase(
+        id="T23",
+        query="总共有多少条告警",  # 纯计数、未提画图 → 单步 aggregate（few-shot ①）
+        expect_tools=["aggregate_alarms"],
+        forbid_args_keys={0: ["time_start", "time_end"]},
+        tag="发散-纯统计",
+    ),
+    EvalCase(
+        id="T24",
+        query="查跳广场舞的告警",  # 不在权威清单 → direct_response（few-shot ②）
+        expect_tools=["direct_response"],
+        must_be_direct_response=True,
+        tag="发散-不支持类型",
+    ),
+    EvalCase(
+        id="T25",
+        query="有没有人打篮球的告警",  # 同上，口语化措辞
+        expect_tools=["direct_response"],
+        must_be_direct_response=True,
+        tag="发散-不支持类型",
+    ),
+    EvalCase(
+        id="T26",
+        query="给我看最近20条告警",  # 口语"最近N条" → pagesize 限数量，不加时间（few-shot ①）
+        expect_tools=["ai_event_list"],
+        expect_args_contains={0: {"pagesize": 20}},
+        forbid_args_keys={0: ["time_start", "time_end"]},
+        tag="发散-最近N条",
+    ),
 ]
 
 
