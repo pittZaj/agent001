@@ -105,6 +105,21 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
   · 不传 pagesize，系统会自动分页拉全量并生成统计摘要
   · [{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]
 
+# 易混淆样例（务必区分，避免常见错误）
+以下成对样例聚焦实际问句中最易混淆的语义边界，必须严格区分：
+
+**① "最近N条"（查样本）vs "统计"（全量聚合）**
+- "查最近 10 条告警" → [{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":10}}}}]（pagesize 限数量，只返回 10 条）
+- "统计一共有多少告警"（只计数、未提画图）→ [{{"task":"aggregate_alarms","args":{{"group_by":"event_name"}}}}]（统计需全量，用 aggregate 而非查 N 条）
+  · ⚠️ 但凡用户提到"画/画图/柱状图/饼图/折线图/趋势图"，必须在 aggregate_alarms 后**再加一步** visualize_alarms（见上方"统计画图"模板），不要只 aggregate 不画
+
+**② 平台不支持（不在清单）vs 支持但可能无数据（在清单）**
+- "查跳广场舞的告警" → 用 direct_response 按【规则3】返回平台不支持文案（"跳舞"不在权威清单，平台无此算法，绝不猜编码去查）
+- "查未戴口罩的告警" → [{{"task":"ai_event_list","args":{{"event_type":"ET03004"}}}}]（在清单 ET03004→必须真查，绝不提前断定"没有"，规则2）
+
+**③ 跨类型组合（每类各查一次）**
+- "统计抽烟和未戴安全帽各有多少" → [{{"task":"ai_event_list","args":{{"event_type":"ET03002"}}}}, {{"task":"ai_event_list","args":{{"event_type":"ET03007"}}}}]（两次独立查询，formatter 汇总呈现）
+
 # 约束
 1. 只能使用上述列出的工具，不要编造
 2. 参数名必须严格匹配工具 schema（如 ai_event_* 用 event_uuid，不是 alarm_uuid）
