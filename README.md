@@ -1,117 +1,120 @@
-# KSAgent - 安全生产场景 AI 智能体
+# KSAgent — 安全生产场景 AI 智能体平台
 
-> 基于 LangGraph + Qwen3-VL + MCP 的多模态智能体平台  
-> **当前版本**: v3.2 (阶段2.5.1已完成 + 真实平台对接完成)  
-> **最后更新**: 2026-06-10
+> 基于 LangGraph + Qwen3-VL + MCP 的多模态智能体平台，对接真实 KSIpms 综合管理平台
+> **当前版本**: v4.0（真实平台对接 + RAG + 短期记忆 + P0 时延优化 + 方向三 Skill/提示词优化 全部完成）
+> **最后更新**: 2026-06-30
 
 ---
 
 ## 📋 项目状态
 
-- ✅ **阶段1**: 最小可运行框架 - 已完成
-- ✅ **阶段2**: MCP 集成 + Skill Registry - 已完成
-- ✅ **阶段2.5**: 复杂任务编排能力验证 - 已完成（2026-06-05）
-  - 3个端到端Demo验证通过（VLM复判+可视化+多步编排）
-  - 步骤间传参增强（纯引用+混合字符串+嵌套字段）
-  - VLM复判子图泛化（支持8类告警）
-  - 只写MCP Server（受控回写+审计）
-- ✅ **阶段3**: RAG 知识库集成 - 已完成（2026-06-08）
-  - 自建轻量方案（Qdrant + BGE-M3 + reranker）
-  - kb_regulation Skill已注册，端到端验证通过
-  - 知识库管理Web界面（上传/检索/编辑/参数调优）
-- ✅ **阶段2.5.1**: 真实平台对接 - 已完成（2026-06-10）
-  - HTTP 直连真实 MCP Server（192.168.1.199:6620/mcp）
-  - 19 个真实工具动态注册（ai_event_* / video_* / system_*）
-  - 下游 skill 改造完成（aggregate/visualize/vlm_judge/update_alarm_status）
-  - 跨事件循环连接修复（线程本地存储方案）
-  - 3 个端到端 Demo 全部验证通过
-- 📅 **阶段4**: Agent-of-Agent 平台化 - 规划中（2周）
-- 📅 **阶段5**: 生产优化 - 规划中（3周）
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| **阶段 1** | 最小可运行框架（FastAPI + LangGraph + VLM） | ✅ 已完成 |
+| **阶段 2** | MCP 集成 + Skill Registry + Plan-Execute | ✅ 已完成 |
+| **阶段 2.5** | 复杂任务编排能力验证（3 个端到端 Demo） | ✅ 已完成（2026-06-05） |
+| **阶段 3** | RAG 知识库集成（Qdrant + BGE-M3 + reranker） | ✅ 已完成（2026-06-08） |
+| **阶段 2.5.1** | 真实平台对接（HTTP 直连真实 MCP Server） | ✅ 已完成（2026-06-10） |
+| **多模态聊天 + 短期记忆** | 类 ChatGPT 接口 / 会话隔离 / Redis 持久化 / SSE 流式 | ✅ 已完成 |
+| **P0 时延优化** | MCP 连接复用 / fast-path 预路由 / 并发翻页 | ✅ 已完成（2026-06-22） |
+| **方向三：Skill 与提示词优化** | T0~T10 共 11 项（见下文） | ✅ 已完成（2026-06-30） |
+
+> 历史 README（v3.2，2026-06-10）多处已滞后，本版以 2026-06-30 现网代码为准重写。
 
 ---
 
 ## 🎯 核心能力
 
-### 1. 多模态告警复判（已验证）
-接收 YOLO 检测结果 + 原图，调用 Qwen3-VL-4B-FP8 进行二次确认
-- **支持8类告警**：抽烟、未戴安全帽、手机使用、未戴口罩、跌倒、火灾烟雾、入侵、其他PPE违规
-- **端到端闭环**：VLM复判 → verdict自动映射（confirmed→closed / rejected→false_alarm）→ 回写数据库 + 审计日志
-- **泛化子图**：vlm_judge_subgraph 支持任意告警类型，prompt工程优化
-- 每图 ≤1 次 VLM 调用（成本优化）
+### 1. 自然语言操作（Plan-Execute）
+文字/图文输入 → LLM 动态规划 → 统一调用工具 → 汇总响应。
 
-### 2. 自然语言操作（Plan-Execute，已增强）
-文字/语音输入 → LLM 动态规划 → 自动调用工具 → 汇总响应
-- **Planner**: 从 Skill Registry 动态读取可用工具（含RAG）
-- **Executor**: 通过 Registry 统一调用（MCP/本地/子图），支持复杂步骤间传参
-  - 纯引用：`{{step_0.field}}` 保留原类型（list/dict/int）
-  - 混合字符串：`"告警ID是 {{step_0.uuid}}"` 自动拼接
-  - 嵌套字段：`{{step_0.data.items[0].id}}` 多层访问
-- **可观测**: 计划与执行步骤完整审计
-- **Formatter**: 智能压缩中间结果（自动剥离image_base64等大对象，避免超token上限）
+- **Router**：按是否带图分流（带图走 VLM 直答，纯文本走 Planner 数据链路）
+- **Planner**：从 Skill Registry 动态读取可用工具，生成 JSON 任务数组
+  - 结构化输出（vLLM `guided_json`），必出合法数组，省去正则抠 JSON
+  - 提示词分层（L1 稳定前缀 / L2 半静态字典 / L3 动态时间），利于 prefix caching
+  - 防幻觉规则：区分"平台支持识别"与"数据库有数据"，权威 `event_type` 字典杜绝瞎猜编码
+  - 当前日期注入：避免 LLM 用训练数据年份猜测时间
+- **Executor**：通过 `registry.invoke()` 统一调用（MCP / 本地 / 子图），支持复杂步骤间传参
+  - 纯引用 `{{step_0.field}}` 保留原类型；混合字符串 `"ID是 {{step_0.uuid}}"` 自动拼接；嵌套 `{{step_0.data.items[0].id}}`
+- **Formatter**：智能压缩中间结果（剥离 `image_base64` 等大对象为占位符，避免超 token），统一回答骨架
 
-### 3. 真实平台对接（MCP HTTP 直连，已完成）
-**阶段2.5.1核心改进**: 从本地 SQLite 切换到真实 KSIpms 综合管理平台
-- ✅ HTTP 直连真实 MCP Server（`http://192.168.1.199:6620/mcp`）
-- ✅ 19 个真实工具动态注册（ai_event_* 8个 / video_* 6个 / system_* 5个）
-- ✅ 字段映射对齐（alarm_uuid→uuid, alarm_type→event_type, 等）
-- ✅ 跨事件循环连接修复（线程本地存储，避免 ClosedResourceError）
-- ✅ VLM 复判支持 HTTP 图片 URL（拉取真实平台截图）
-- ✅ 告警回写对接真实 API（ai_event_deal，review_status 映射）
+### 2. 真实平台对接（MCP HTTP 直连）
+从本地 SQLite 模拟切换到真实 KSIpms 综合管理平台。
 
-### 4. 知识库联动（阶段3已完成）
-RAG 查询规章制度，结合图像识别结果给出违规条款
-- **技术方案**: 自建轻量方案（Qdrant + BGE-M3 + BGE-reranker-v2-m3），资源占用 < 2GB
-- **kb_regulation Skill**: 已注册，Planner自动识别是否需要检索知识库
-- **混合检索**: 语义 + 关键词，效果优于纯语义
-- **分块策略**: fixed_size（真正滑动窗口，保证重叠）/ by_paragraph / by_title / by_separator（自定义标记符）
-- **知识库管理Web**: 上传/检索/编辑分块/参数调优/统计
-- **端到端验证**: 已通过（用户问"未戴安全帽违反哪些规定？"→ 返回条文+处罚标准，无幻觉）
+- HTTP 直连真实 MCP Server（`http://127.0.0.1:6620/mcp`，`transport: http`）
+- 19+ 真实工具动态注册（`ai_event_*` / `video_*` / `system_*` / 录像直播 / 压缩任务）
+- 字段映射对齐（`alarm_uuid→uuid`、`alarm_type→event_type`、`camera_id→camera_name` 等）
+- 跨事件循环连接修复：进程级长驻后台事件循环（`utils/async_loop.py`），MCP 连接全程复用，杜绝 `ClosedResourceError` / cancel scope 崩溃
+- MCP 调用重试 + 超时分级：瞬时错误指数退避，业务错不重试（`config.yaml` `mcp.retry`）
+
+### 3. 多模态告警复判（VLM 子图）
+接收告警 + 截图，调用 Qwen3-VL-4B-FP8 二次确认。
+
+- VLM 复判子图泛化，支持多类告警
+- 端到端闭环：VLM 复判 → `verdict` 自动映射（confirmed→review_status=2 / rejected→3）→ 回写真实平台 `ai_event_deal` + 审计
+- 支持 HTTP 图片 URL（拉取真实平台截图）
+
+### 4. 知识库联动（RAG）
+RAG 检索规章制度，引用条文回答违规问题。
+
+- 自建轻量方案：Qdrant + BGE-M3 + BGE-reranker-v2-m3，资源占用 < 2GB
+- `kb_regulation` Skill 已注册，Planner 自动判定是否检索
+- 混合检索（语义 + 关键词）；分块策略可选（fixed_size 滑窗 / by_paragraph / by_title / by_separator）
+- 知识库管理 Web（上传 / 检索调参 / 分块编辑 / 统计）
+- 端到端验证通过（"未戴安全帽违反哪些规定？" → 返回条文 + 处罚标准，无幻觉）
+
+### 5. 数据可视化
+Matplotlib 生成统计图表。
+
+- `aggregate_alarms`（按类型/日期/区域/摄像头聚合）+ `visualize_alarms`（柱状图/折线图/饼图）
+- 大对象剥离避免超 token；中文字体加载
+
+### 6. 短期记忆 + 多会话 + 流式输出
+- 会话级记忆（`thread_id` 隔离），Redis 持久化（`graph/redis_checkpoint.py`），滑动窗口防 token 爆炸
+- 多会话管理 API（`/api/v1/sessions` 增删改查）
+- SSE 流式输出（`stream=true`），逐字下发 token + 进度文案（19+ 工具全中文进度）
 
 ---
 
-## 🏗️ 技术架构（阶段2.5.1最新）
+## 🏗️ 技术架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                 FastAPI 应用层                       │
-│  /api/v1/chat  /api/v1/judge  /health              │
-└────────────────────┬────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────┐
-│         LangGraph 编排层 (Plan-Execute)              │
-│  Router → Planner → Executor → Formatter           │
-│           ↓动态读取      ↓统一调用                   │
-└────────────┬───────────┬─────────────────────────────┘
-             │           │
-┌────────────▼───────────▼─────────────────────────────┐
-│           Skill Registry (统一工具注册表)             │
-│  ┌─────────────────────────────────────────────┐    │
-│  │ MCP_TOOL:  query_alarms, query_person      │    │
-│  │ TOOL:      format_text, calculate          │    │
-│  │ SUBGRAPH:  vlm_judge, rag_query (规划中)   │    │
-│  └─────────────────────────────────────────────┘    │
-└───────────┬──────────────────────┬──────────────────┘
-            │ MCP_TOOL             │ TOOL
-┌───────────▼────────────┐    ┌────▼────────────┐
-│   MCP Adapter          │    │  本地实现        │
-│   (stdio 协议)         │    │  (Python)       │
-└───────────┬────────────┘    └─────────────────┘
-            │
-┌───────────▼────────────┐
-│  MCP Server (ksipms)   │
-│  ┌──────────────────┐  │
-│  │ 权限控制:         │  │
-│  │ - 表白名单        │  │
-│  │ - 字段白名单      │  │
-│  │ - 只读模式        │  │
-│  │ - 审计日志        │  │
-│  └──────────────────┘  │
-└───────────┬────────────┘
-            │
-┌───────────▼────────────┐
-│   SQLite Database      │
-│   data/ksipms_dev.db   │
-└────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  FastAPI 应用层 (8001)                                     │
+│  /api/v1/chat (文本/图文/SSE流式)  /api/v1/judge           │
+│  /api/v1/sessions (多会话 CRUD)   /health                  │
+│  api/kb_routes.py (知识库)                                 │
+└───────────────────────┬────────────────────────────────────┘
+                        │
+┌───────────────────────▼────────────────────────────────────┐
+│  LangGraph 编排层 (Plan-Execute)                            │
+│  route_by_modality → [pre_route fast-path] →                │
+│  Planner → Executor(loop) → Formatter                       │
+│  · 短期记忆(memory.py) · 流式(streaming.py) · 会话(session) │
+└───────────┬───────────────────────────┬─────────────────────┘
+            │ 动态读取                   │ 统一调用
+┌───────────▼───────────────────────────▼─────────────────────┐
+│  Skill Registry (统一工具注册表，动态发现)                   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ MCP_TOOL : ai_event_* / video_* / system_* (HTTP)   │   │
+│  │ TOOL     : aggregate / visualize / fetch_context /   │   │
+│  │            update_alarm_status / direct_response     │   │
+│  │ SUBGRAPH : vlm_judge_alarm / kb_regulation           │   │
+│  └─────────────────────────────────────────────────────┘   │
+└──────┬──────────────────────────┬──────────────────┬────────┘
+       │ MCP (HTTP)               │ 本地 Python       │ 子图
+┌──────▼────────────┐   ┌─────────▼────────┐  ┌──────▼─────────┐
+│ MCP Adapter       │   │ skills/*.py      │  │ vlm_judge /    │
+│ (streamable_http) │   │ (聚合/可视化)    │  │ kb (Qdrant)    │
+│ + 长驻事件循环    │   └──────────────────┘  └────────────────┘
+│ + 重试/超时分级   │
+└──────┬────────────┘
+       │
+┌──────▼──────────────────────┐   ┌──────────────────────────┐
+│ 真实 KSIpms MCP Server      │   │ 业务数据库 MySQL          │
+│ http://127.0.0.1:6620/mcp   │   │ (会话/审计等，6669/ksom)  │
+│ 静态资源 :6611 (告警截图)   │   │ + Redis (记忆持久化)      │
+└─────────────────────────────┘   └──────────────────────────┘
 ```
 
 ---
@@ -120,14 +123,19 @@ RAG 查询规章制度，结合图像识别结果给出违规条款
 
 | 组件 | 技术选型 | 说明 |
 |---|---|---|
-| **Web 框架** | FastAPI 0.115+ | 异步 API、自动 OpenAPI 文档 |
-| **智能体编排** | LangGraph 0.2+ | Plan-Execute 模式、状态图 |
-| **VLM 后端** | Qwen3-VL-4B-FP8 (vLLM) | `http://127.0.0.1:8004/v1` (FP8量化) |
-| **工具协议** | MCP (Model Context Protocol) | HTTP 直连真实平台（19 个工具） |
-| **工具管理** | Skill Registry | 统一注册表，动态发现，跨事件循环支持 |
-| **知识库** | Qdrant + BGE-M3 + reranker | 自建轻量方案（已完成） |
-| **数据库** | SQLite 3 | 告警、人员、录像、审计数据 |
-| **语音** | Whisper / FunASR | 语音转文字（待接入） |
+| **Web 框架** | FastAPI 0.136 + uvicorn | 异步 API、OpenAPI 文档、SSE 流式 |
+| **智能体编排** | LangGraph 0.2.45 | Plan-Execute 状态图 |
+| **LLM / VLM 后端** | Qwen3-VL-4B-Instruct-FP8 (vLLM) | `http://127.0.0.1:8004/v1`（FP8 量化） |
+| **工具协议** | MCP 1.28（streamable_http） | HTTP 直连真实平台 `:6620/mcp`（19+ 工具） |
+| **工具管理** | Skill Registry | 统一注册表，动态发现，跨事件循环复用 |
+| **知识库** | Qdrant 1.18 + BGE-M3 + bge-reranker-v2-m3 | 自建轻量方案，混合检索，device=cuda:0 |
+| **业务数据库** | MySQL（aiomysql / pymysql） | 会话、审计等（`127.0.0.1:6669/ksom`） |
+| **记忆持久化** | Redis 5.2 | 会话级短期记忆，TTL 30 天 |
+| **Web 管理界面** | Gradio 5.50（7860） | 对话调试 + 知识库管理两 Tab |
+| **可视化** | Matplotlib 3.10 | 告警统计图表 |
+| **嵌入/重排运行时** | torch 2.8.0 / transformers 4.57.6 | 钉版本（见环境约束） |
+
+> ⚠️ **环境约束**：torch 2.8.0+cu128 / transformers 4.57.6 为钉版本，降版会导致 `cuda.is_available()==False` 或 reranker 报错。Python 3.10（勿用 3.14，mcp 对 starlette 有额外约束）。
 
 ---
 
@@ -136,548 +144,255 @@ RAG 查询规章制度，结合图像识别结果给出违规条款
 ```
 agent/
 ├── README.md                    # 本文档
-├── ARCHITECTURE_V2.md           # 阶段2架构设计说明
-├── ROADMAP.md                   # 后期任务规划（阶段3-5）
-├── DEVELOPER_GUIDE.md           # 开发操作手册
-├── config.yaml                  # 主配置文件
-├── main.py                      # FastAPI 入口
-├── graph/
-│   ├── state.py                 # LangGraph 状态定义
-│   ├── nodes.py                 # 节点：planner/executor/formatter
-│   └── graph.py                 # 图构建：Plan-Execute
-├── skills/                      # ✨ 阶段2新增
+├── main.py                      # FastAPI 入口（chat/judge/sessions/health）
+├── config.yaml                  # 主配置（llm/mcp/kb/database/redis/server）
+├── requirements.txt             # 依赖（生产环境，Python 3.10）
+├── requirements-vllm.txt        # vLLM 推理服务依赖（独立进程）
+├── restart_api.sh               # 重启 FastAPI（8001）
+├── restart_web.sh               # 重启 Gradio 调试平台（7860）
+├── api/
+│   └── kb_routes.py             # 知识库 API 路由
+├── graph/                       # LangGraph 编排层
+│   ├── state.py                 # AgentState 状态定义
+│   ├── graph.py                 # 图构建（Plan-Execute + 流式入口）
+│   ├── nodes.py                 # 核心节点：planner / executor / formatter
+│   ├── planner_prompt.py        # ✨T2 提示词分层（L1/L2/L3）
+│   ├── answer_skeleton.py       # ✨T10 统一回答骨架
+│   ├── pre_router.py            # ✨P0 fast-path 预路由（闲聊/规章）
+│   ├── pagination.py            # ✨P0 并发翻页 + ✨T6 created_at 排序兜底
+│   ├── streaming.py             # SSE 流式 + 工具进度文案
+│   ├── memory.py                # 短期记忆（历史拼接）
+│   ├── session_manager.py       # 多会话管理
+│   └── redis_checkpoint.py      # Redis 记忆持久化
+├── skills/                      # Skill Registry
 │   ├── base.py                  # Skill 抽象（TOOL/MCP_TOOL/SUBGRAPH）
-│   ├── registry.py              # Skill Registry 实现
+│   ├── registry.py              # Registry 实现（动态发现 + invoke）
+│   ├── init.py                  # Registry 初始化（注册本地/子图）
 │   ├── mcp_skills.py            # MCP 工具注册
-│   └── init.py                  # Registry 初始化
-├── mcp_adapter/                 # ✨ 阶段2新增
-│   ├── client.py                # MCP Client (stdio 协议)
-│   └── __init__.py
-├── mcp_servers/                 # ✨ 阶段2新增
-│   ├── ksipms_server.py         # KSIPMS MCP Server 实现
-│   ├── config.yaml              # MCP Server 配置（权限白名单）
-│   └── __init__.py
-├── models/
-│   └── schemas.py               # Pydantic 数据模型
+│   ├── mcp_watcher.py           # MCP 连接健康检测 + 自动重连
+│   ├── event_types.py           # 告警类型权威字典（防幻觉）
+│   ├── alarm_skills.py          # 聚合/可视化/上下文/回写
+│   ├── vlm_judge_subgraph.py    # VLM 复判子图
+│   └── kb/                      # RAG 知识库（service/config/skill）
+├── mcp_adapter/
+│   └── client.py                # MCP Client（streamable_http + 重试 + 长驻循环）
 ├── utils/
-│   ├── vlm.py                   # Qwen3-VL 调用封装
-│   └── __init__.py
-├── agent/                       # Agent-of-Agent 元智能体
-│   ├── run_meta_agent.py        # 元智能体运行入口
-│   ├── registry.py              # 智能体注册表
-│   ├── publish.py               # 发布智能体
-│   └── meta_agent/
-│       ├── spec_parser.py       # 需求解析
-│       ├── prompt_generator.py  # 提示词生成
-│       ├── code_generator.py    # 代码生成
-│       ├── executor.py          # 测试执行
-│       ├── evaluator.py         # 验收评估
-│       ├── feedback_analyzer.py # 反馈分析
-│       ├── llm_client.py        # LLM 客户端
-│       └── tool_impl.py         # 工具实现（待迁移到 Registry）
-└── tests/
-    ├── test_mcp_tools.py        # MCP 工具测试
-    ├── test_e2e.py              # 端到端测试
-    └── test_e2e_simple.py       # 简单端到端测试
-
+│   ├── llm_pool.py              # ✨P0 LLM 客户端单例池
+│   ├── async_loop.py            # ✨P0 进程级长驻事件循环
+│   └── vlm.py                   # Qwen3-VL 调用封装
+├── eval/                        # ✨T0 轻量 planner 层回归评测
+│   ├── cases.py                 # 26 条评测用例（12 维度）
+│   ├── run_planner_eval.py      # 主入口（断言 + baseline diff）
+│   └── baseline.json            # 基线快照
+├── web/
+│   └── app.py                   # Gradio 调试平台（对话 + 知识库）
+├── agent/                       # Agent-of-Agent 元智能体（MVP）
+├── models/schemas.py            # Pydantic 数据模型
+├── migrations/                  # 数据库迁移
+└── tests/                       # 测试
 ```
-
-### 4. RAG 知识库集成（已完成）
-规章制度知识库查询，智能体可引用条文回答问题
-- **技术方案**：自建轻量方案（Qdrant + BGE-M3 + BGE-reranker-v2-m3），资源占用 < 2GB
-- **kb_regulation Skill**：已注册到Skill Registry，Planner自动识别是否需要检索
-- **混合检索**：语义 + 关键词，效果优于纯语义（retrieval_mode=hybrid）
-- **分块策略**：
-  - fixed_size：固定字数（可调大小+重叠，真正的滑动窗口保证重叠）
-  - by_paragraph：按段落
-  - by_title：按Markdown标题层级
-  - by_separator：按特殊标记符（如 `****`）
-- **知识库管理Web界面**：
-  - 上传文档（PDF/Word/Markdown/TXT）
-  - 检索测试（参数调优：召回数、检索模式、相似度阈值）
-  - 查看/编辑分块（支持逐块修改并重新向量化）
-  - 统计信息（文档数、向量数）
-- **端到端验证**：用户问"未戴安全帽违反哪些规定？" → Planner自动调用kb_regulation → 返回条文+处罚标准，无幻觉
-- **已上传文档**：安全生产管理规定（覆盖8类告警）+ 员工手册（日常管理制度）
-
-### 5. 数据可视化（已验证）
-Matplotlib生成统计图表，自动压缩base64传递
-- **聚合统计**：aggregate_alarms（按类型、日期、区域聚合）
-- **可视化**：visualize_alarms（柱状图、折线图、饼图）
-- **大对象剥离**：formatter自动剥离image_base64（28KB+），只保留占位符，避免超token上限
-
-### 6. 复杂任务编排（已验证，真实平台数据）
-多步骤、跨模态、需回写、需可视化的真实业务链路
-- **Demo 1**：统计+可视化（真实平台 10476 条告警 → 聚合 → 画图 → 自然语言回复）
-- **Demo 2**：复判闭环（ai_event_detail 获取真实截图 → VLM 推理 → verdict 映射 → 回写 review_status）
-- **Demo 3**：设备查询（video_device_list 返回真实设备列表）
-- **已验证场景**：端到端真实平台数据流转，无模拟数据
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 环境准备
+### 前置服务
+- **vLLM**（Qwen3-VL-4B-FP8）：监听 8004
+- **真实 MCP Server**：`http://127.0.0.1:6620/mcp`（静态资源 6611）
+- **Qdrant**：6333（RAG）
+- **MySQL**：6669 / **Redis**：见 `config.yaml`
 
+### 启动 FastAPI（生产接口）
 ```bash
-# 1. 克隆项目
+source /root/anaconda3/bin/activate agent
 cd /mnt/data3/clip/LangGraph/agent
-
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. 初始化数据库
-python -m agent.data.seed
-
-# 4. 启动 FastAPI
-python main.py
+bash restart_api.sh           # 或 python main.py
+# 健康检查
+curl http://127.0.0.1:8001/health
 ```
 
-### 2. 访问 API 文档
-
-```
-http://localhost:8000/docs
-```
-
-### 3. 测试文本对话
-
+### 启动 Gradio 调试平台（演示）
 ```bash
-curl -X POST http://localhost:8000/api/v1/chat \
+cd /mnt/data3/clip/LangGraph/agent
+bash restart_web.sh           # 端口 7860
+# Tab: 主智能体对话测试 / 知识库管理
+```
+
+### 调用示例
+```bash
+# 文本对话
+curl -X POST http://127.0.0.1:8001/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "test123",
-    "message": "今天有哪些告警？"
-  }'
+  -d '{"session_id":"demo","message":"统计每种告警类型数量并画柱状图"}'
+
+# SSE 流式
+curl -N -X POST http://127.0.0.1:8001/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","message":"查最近5条告警","stream":true}'
+```
+
+### 经典 Demo
+```text
+统计每种告警类型数量并画柱状图        # 统计 + 可视化（多步编排）
+复判告警 <UUID> 并回写它的状态        # VLM 复判闭环
+未戴安全帽违反哪些规定？会被怎么处罚？ # RAG 知识库联动
+查最近 5 条 AI 告警                   # 客户端 created_at 排序兜底
 ```
 
 ---
 
-## 📡 API 设计
+## 📡 API 速览
 
-### 1. 文本对话（自然语言操作）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查（LLM / MCP 在线状态） |
+| POST | `/api/v1/chat` | 文本/图文对话；`stream=true` 走 SSE |
+| POST | `/api/v1/judge` | 多模态告警复判（图片 + 检测结果） |
+| GET/POST | `/api/v1/sessions` | 会话列表 / 新建 |
+| GET/PUT/DELETE | `/api/v1/sessions/{id}` | 会话详情 / 改名 / 删除 |
+| (kb_routes) | `/api/...` | 知识库上传 / 检索 / 管理 |
 
-**请求**：
-```bash
-POST /api/v1/chat
-Content-Type: application/json
-
-{
-  "session_id": "user123_20260604",
-  "message": "今天发生了哪几种告警事件？",
-  "stream": false
-}
-```
-
-**响应**：
-```json
-{
-  "session_id": "user123_20260604",
-  "response": "今天共发生 3 类告警：\n1. 未戴安全帽 (5 次)\n2. 抽烟 (2 次)\n3. 接打电话 (1 次)",
-  "tool_calls": [
-    {
-      "tool": "query_alarms",
-      "args": {"date": "2026-06-04"},
-      "result": "..."
-    }
-  ],
-  "elapsed_ms": 1234
-}
-```
-
-### 2. 多模态告警复判
-
-**请求**：
-```bash
-POST /api/v1/judge
-Content-Type: multipart/form-data
-
-image: <binary>
-yolo_result: {"class": "no_helmet", "confidence": 0.87}
-```
-
-**响应**：
-```json
-{
-  "verdict": {
-    "smoking": 0,
-    "helmet": 0,
-    "phone": 0,
-    "mask": 1
-  },
-  "reasoning": "图中人员未佩戴安全帽，但戴了口罩",
-  "confidence": 0.92,
-  "elapsed_ms": 856
-}
-```
-
-### 3. 知识库联动复判（阶段3规划）
-
-**请求**：
-```bash
-POST /api/v1/judge_with_kb
-Content-Type: application/json
-
-{
-  "image_base64": "data:image/jpeg;base64,...",
-  "yolo_result": {"class": "smoking", "confidence": 0.91},
-  "kb_query": "抽烟违反哪些规定"
-}
-```
-
-**响应**：
-```json
-{
-  "verdict": {"smoking": 1, "helmet": 2, "phone": 0, "mask": 2},
-  "reasoning": "检测到抽烟行为",
-  "violations": [
-    {
-      "rule_id": "SOP-2024-03",
-      "title": "禁烟区管理规定",
-      "excerpt": "...",
-      "page": 5
-    }
-  ],
-  "elapsed_ms": 1523
-}
-```
+`/api/v1/chat` 响应含 `response` / `plan` / `tool_calls` / `session_id` 字段。
 
 ---
 
-## 🔄 LangGraph 图结构（Plan-Execute 模式）
-
-```
-┌─────────┐
-│  START  │
-└────┬────┘
-     │
-     v
-┌─────────────┐
-│  Router     │  ← 识别请求类型（chat/judge）
-└────┬────────┘
-     │
-     v
-┌─────────────┐
-│  Planner    │  ← LLM 解析用户意图，生成任务列表
-│  (LLM)      │     从 Skill Registry 动态读取可用工具 ✨
-└────┬────────┘     例如："查询告警" → [query_alarms, format_response]
-     │
-     v
-┌─────────────┐
-│  Executor   │  ← 逐个执行任务：
-│  (Loop)     │     - 通过 Skill Registry 调用工具 ✨
-│             │     - 自动路由到 MCP Server / 本地函数 / 子图
-│             │     - 调用 MCP 工具（query_alarms, query_person）
-│             │     - 调用 VLM 复判（规划中）
-│             │     - 查询 RAG 知识库（规划中）
-└────┬────────┘
-     │
-     v
-┌─────────────┐
-│ Should      │  ← 检查是否需要重新规划
-│ Continue?   │     （任务失败/结果不足）
-└─┬─────────┬─┘
-  │ More    │ Done
-  v         v
- (回 Executor) ┌─────────────┐
-              │  Formatter  │  ← 格式化最终响应
-              └────┬────────┘
-                   v
-              ┌─────────┐
-              │   END   │
-              └─────────┘
-```
-
-**状态定义**（`graph/state.py`）：
-```python
-from typing import TypedDict, List, Dict, Any
-
-class AgentState(TypedDict):
-    session_id: str
-    user_message: str
-    plan: List[Dict[str, Any]]  # 任务列表
-    current_task_idx: int
-    tool_results: List[Dict[str, Any]]
-    final_response: str
-    error: str | None
-```
-
----
-
-## ⚙️ 配置文件（config.yaml）
+## ⚙️ 配置要点（config.yaml）
 
 ```yaml
-# LLM 配置
 llm:
-  base_url: "http://127.0.0.1:8002/v1"
-  model: "Qwen3-VL-4B-Instruct"
-  api_key: "EMPTY"
-  temperature: 0.2
-  max_tokens: 2048
-
-# MCP 配置（✨ 阶段2新增）
+  base_url: http://127.0.0.1:8004/v1   # vLLM Qwen3-VL-4B-FP8
+  model: Qwen3-VL-4B-Instruct-FP8
+  guided_json_enabled: true            # T1 结构化输出开关（可回退正则）
 mcp:
-  enabled: true
-  servers:
-    ksipms:
-      command: python
-      args: ["-m", "mcp_servers.ksipms_server"]
-
-# RAG 知识库（阶段3规划）
-rag:
-  enabled: false
-  ragflow_url: "http://ragflow.internal:8080"
-  dataset_id: "safety_regulations"
-
-# 数据库
+  transport: http
+  endpoint: http://127.0.0.1:6620/mcp  # 真实平台 MCP Server
+  om_base_url: http://127.0.0.1:6611   # 告警截图静态资源
+  retry: { max_attempts: 3, backoff_base: 0.5, backoff_max: 4.0 }  # T5 重试分级
+  reconnect: { interval: 10, health_interval: 30 }                 # 自动重连
+kb:
+  device: cuda:0                       # RAG 模型显卡
+  chunk_size: 300                      # 条文级检索更精准
+  collection_name: safety_regulations
 database:
-  url: "sqlite:///data/ksipms_dev.db"
-
-# FastAPI
+  url: mysql+pymysql://...@127.0.0.1:6669/ksom
+redis:
+  enabled: true                        # 短期记忆持久化
+  ttl: 2592000                         # 30 天
 server:
-  host: "0.0.0.0"
-  port: 8000
-  reload: false
-```
-
-**MCP Server 配置**（`mcp_servers/config.yaml`）：
-```yaml
-ksipms_server:
-  db_path: data/ksipms_dev.db
-  read_only: true  # 只读模式
-  
-  # 表白名单
-  allowed_tables:
-    - alarms
-    - persons
-    - video_clips
-  
-  # 字段白名单（隐私保护）
-  table_fields:
-    alarms:
-      - alarm_uuid
-      - alarm_type
-      - camera_id
-      - severity
-      - ts_event
-      # 不暴露: person_id（隐私）
-    
-    persons:
-      - person_id
-      - name
-      - department
-      # 不暴露: id_card, phone（隐私）
+  port: 8001
 ```
 
 ---
 
-## ✅ 成功标准（验收条件）
+## 🧩 方向三：Skill 与提示词优化（T0~T10，已全部完成）
 
-### 阶段1：最小可运行框架 ✅ 已完成
-- [x] FastAPI 启动成功，`GET /health` 返回 200
-- [x] 文本对话接口能调通 vLLM，返回 LLM 生成的回复
-- [x] LangGraph 图能跑通简单的 Plan-Execute 流程
-- [x] 多模态接口能接收图片 + 文本，调用 Qwen3-VL 返回判断结果
+依据《平台优化建议书》§6，11 项任务全部落地（详见 `plan/DIRECTION3_COMPLETION_SUMMARY.md`）：
 
-### 阶段2：MCP 集成 ✅ 已完成
-- [x] **MCP Server 实现** - `mcp_servers/ksipms_server.py` 完成
-- [x] **Skill Registry 实现** - 统一工具注册表（TOOL/MCP_TOOL/SUBGRAPH）
-- [x] **Planner 升级** - 从 Skill Registry 动态读取工具列表
-- [x] **Executor 升级** - 通过 `registry.invoke()` 统一调用工具
-- [x] **权限控制** - 表白名单、字段白名单、只读模式、审计日志
-- [x] **MCP Adapter** - stdio 协议客户端实现完成
-- [x] **单元测试** - MCP 工具测试通过
-- [x] **架构验证** - 满足 ARCHITECTURE.md 设计思路
+| 任务 | 内容 | 关键产出 |
+|------|------|---------|
+| **T0** | 轻量回归评测脚本（标尺先行） | `eval/`：26 条用例 + baseline diff，退出码可阻断回退 |
+| **T1** | guided_json 结构化输出 | planner 必出合法 JSON 数组，配置开关可回退 |
+| **T2** | 提示词分层（L1/L2/L3） | `planner_prompt.py`，利于 prefix caching + 可维护 |
+| **T3** | Few-shot 覆盖发散意图 | 对比型样例（最近N条 vs 统计 / 不支持类型） |
+| **T4** | 降级路径友好化 | 解析失败/异常对用户给友好话术，原文仅落日志 |
+| **T5** | MCP 重试 + 超时分级 | 瞬时错误指数退避，业务错不重试 |
+| **T6** | ai_event_list 排序兜底 | `recent` 标志 → 全量拉取 + created_at 降序 + 截断 |
+| **T7** | 进度文案补全 | 19+ 工具全中文流式进度 |
+| **T8** | 代码卫生（去重） | 清理重复定义 |
+| **T9** | 字体加载说明 | 确认导入期一次性，零行为变更 |
+| **T10** | formatter 两条出口统一 | `answer_skeleton.py` 统一回答骨架 |
 
-**待验证**（需 LLM 服务）：
-- [ ] 端到端流程验证（用户询问 → Plan → 调用工具 → 返回结果）
-- [ ] 完整 MCP stdio 协议启用（当前使用临时方案）
-- [ ] 隐私保护验证（确认敏感字段不暴露）
-
-### 阶段3：RAG 知识库集成 🚧 规划中（2周）
-- [ ] RAGFlow 部署并上传测试文档
-- [ ] KB Adapter 实现（RagflowAdapter）
-- [ ] `kb_regulation` Skill 注册到 Registry
-- [ ] 文本查询能返回具体条文（"未戴安全帽违反哪些规定？"）
-- [ ] 图片识别 + KB 联动流程跑通
-- [ ] 检索准确率 > 80%（人工评估）
-
-### 阶段4：Agent-of-Agent 平台化 📅 规划中（2周）
-- [ ] 迁移 `tool_impl.py` 到 Skill Registry
-- [ ] 创建 `RULES.md`（代码生成约束）
-- [ ] 元智能体生成的 Agent 使用 Skill Registry（无直接数据库访问）
-- [ ] 端到端流程跑通（需求描述 → 生成 → 测试 → 发布）
-- [ ] Web 界面能管理 Agent（创建/列表/测试）
-- [ ] 动态路由加载已发布 Agent
-
-### 阶段5：生产优化 📅 规划中（3周）
-- [ ] 完整启用 MCP stdio 协议（替换临时方案）
-- [ ] API 响应 P95 < 3s
-- [ ] 错误率 < 1%
-- [ ] 流式输出（WebSocket）
-- [ ] 监控仪表板上线（Prometheus + Grafana）
-- [ ] 文档完善度 > 90%
-- [ ] 安全加固（JWT 认证、权限分级）
+**铁律**：所有提示词改动前后均跑 T0 回归，零退化（0 条 pass→fail），退出码 0。运行：
+```bash
+cd /mnt/data3/clip/LangGraph/agent && python -m eval.run_planner_eval
+```
 
 ---
 
-## 🎯 阶段2核心改进说明
+## ⚡ P0 时延优化（已完成，2026-06-22）
 
-### 从硬编码 SQL 到 MCP 协议
+详见 `plan/LATENCY_OPTIMIZATION_EXECUTION_PLAN_2026-06-22.md` 及各 TASK 报告：
 
-**之前（阶段1）**：
-```python
-# 直接写 SQL 查询（问题：数据库完全暴露）
-import sqlite3
-conn = sqlite3.connect("data/ksipms_dev.db")
-result = conn.execute("SELECT * FROM alarms WHERE ...").fetchall()
+- **4.1 MCP 连接复用**：进程级长驻事件循环（`utils/async_loop.py`），一次图执行从 N 次握手降为 1 次
+- **4.2 fast-path 预路由 + LLM 单例池**（`pre_router.py` / `llm_pool.py`）：闲聊/规章跳过完整 planner
+- **4.3 并发翻页**（`pagination.py`）：`asyncio.gather` + 限流，多页拉取串行→并发
+
+---
+
+## 🔄 LangGraph 图结构
+
+```
+START → route_by_modality
+          ├─ 带图 → vlm_chat（VLM 直答）
+          └─ 纯文本 → [pre_route fast-path?]
+                        ├─ 命中(闲聊/规章) → 直接出 plan
+                        └─ 未命中 → Planner(LLM, guided_json)
+                                      → Executor(loop, registry.invoke)
+                                          → should_continue?(More→loop / Done)
+                                              → Formatter → END
 ```
 
-**现在（阶段2）**：
-```python
-# 通过 Skill Registry 调用 MCP 工具（优势：权限可控、隐私保护）
-from skills import get_skill_registry
-
-registry = get_skill_registry()
-result = await registry.invoke(
-    skill_id="query_alarms",  # MCP 工具
-    args={"date": "2026-06-04"},
-    context={"session_id": "test"}
-)
-# MCP Server 自动：
-# 1. 检查表白名单（alarms 是否允许）
-# 2. 过滤字段白名单（隐藏 person_id）
-# 3. 记录审计日志
-# 4. 只读模式保护
-```
-
-### 架构对比
-
-| 维度 | 阶段1 | 阶段2（MCP + Registry） |
-|------|-------|------------------------|
-| 数据库暴露 | ✗ 完全暴露（表结构、字段、SQL） | ✅ MCP Server 白名单控制 |
-| 权限控制 | ✗ 无（代码写死） | ✅ 配置化，细粒度控制 |
-| 隐私保护 | ✗ 所有字段可见 | ✅ 字段白名单，敏感字段隐藏 |
-| 灵活性 | ✗ 改工具需改代码 | ✅ MCP 配置即可 |
-| 可测试性 | ✗ 需要真实数据库 | ✅ 可 mock MCP Server |
-| 扩展性 | ✗ 新数据源需改代码 | ✅ 新增 MCP Server 即可 |
-| 审计 | ✗ 无 | ✅ 所有调用记录审计日志 |
+`AgentState`（`graph/state.py`）核心字段：`session_id` / `user_message` / `plan` / `current_task_idx` / `tool_results` / `step_outputs` / `final_response` / `messages`(短期记忆) / `error`。
 
 ---
 
 ## 📚 文档导航
 
-### 日常开发
-- **[DEVELOPER_GUIDE_new.md](DEVELOPER_GUIDE_new.md)** - 开发操作手册（Skill/MCP/智能体开发，60+ 代码示例）
-- **[plan/QUICK_START.md](plan/QUICK_START.md)** - 快速启动指南（5 分钟体验 3 个 Demo）
-- **[plan/WEB_RESTART_GUIDE.md](plan/WEB_RESTART_GUIDE.md)** - Web 服务重启指南
+**架构与开发**
+- `ARCHITECTURE_V2.md` — 阶段2架构（MCP / Skill Registry / Plan-Execute）
+- `DEVELOPER_GUIDE.md` — 开发操作手册（Skill/MCP/智能体，含大量示例）
+- `HTTP 接口对接说明文档-V3.md` — 对外 HTTP 接口对接
 
-### 架构理解
-- **[ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)** - 阶段2架构设计说明（MCP/Skill Registry/Plan-Execute）
-- **[plan/COMPLEXITY_VALIDATION_PLAN.md](plan/COMPLEXITY_VALIDATION_PLAN.md)** - 复杂任务编排实施规划
-- **[plan/RAG_IMPLEMENTATION_PLAN.md](plan/RAG_IMPLEMENTATION_PLAN.md)** - RAG 知识库集成实施文档
+**优化方案与完成报告**（`plan/`）
+- `PLATFORM_OPTIMIZATION_PROPOSAL_2026-06-18.md` — 平台优化建议书（总纲）
+- `SKILL_PROMPT_OPTIMIZATION_EXECUTION_PLAN_2026-06-23.md` — 方向三执行摘要
+- `DIRECTION3_COMPLETION_SUMMARY.md` — 方向三整体完成汇总
+- `LATENCY_OPTIMIZATION_EXECUTION_PLAN_2026-06-22.md` — P0 时延优化方案
+- `TASK_T0~T10_*.md` — 方向三各任务完成报告
+- `TASK_4_1~4_3_*.md` — P0 时延各任务完成报告
 
-### 项目管理
-- **[ROADMAP.md](ROADMAP.md)** - 后期任务规划（阶段3-5）
-- **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** - 文档索引
-- **[STAGE2_SUMMARY.md](STAGE2_SUMMARY.md)** - 阶段2完成总结
-- **[plan/DELIVERY_SUMMARY.md](plan/DELIVERY_SUMMARY.md)** - 复杂任务编排验证交付总结
-- **[plan/RAG_COMPLETION_SUMMARY.md](plan/RAG_COMPLETION_SUMMARY.md)** - RAG 知识库集成完成总结
-- **[plan/STAGE_2_5_1_COMPLETION_SUMMARY.md](plan/STAGE_2_5_1_COMPLETION_SUMMARY.md)** - 真实平台对接完成总结（2026-06-10）
-
-### 平台对接
-- **[plan/MCP_SERVER_SPECIFICATION.md](plan/MCP_SERVER_SPECIFICATION.md)** - MCP Server 开发规范与对接指南（13,000字，含完整示例）
-- **[plan/PLATFORM_INTEGRATION_ASSESSMENT.md](plan/PLATFORM_INTEGRATION_ASSESSMENT.md)** - 平台对接 vs RAG 集成技术评估
-
-### 演示测试
-- **[plan/RAG_DEMO_TEST_CASES.md](plan/RAG_DEMO_TEST_CASES.md)** - RAG 知识库联动演示测试用例（20+ 用例）
-
----
-
-## 📖 参考资料
-
-**架构参考**：
-- [FastAPI + LangGraph + MCP 生产级模板](https://github.com/wassim249/fastapi-langgraph-agent-production-ready-template)
-- [Building Smart Web AI Agents with MCP, LangGraph & FastAPI](https://sgino209.medium.com/building-smart-web-ai-agents-with-mcp-langgraph-fastapi-da2734fe5256)
-- [MCP 多服务器架构](https://github.com/junfanz1/MCP-MultiServer-Interoperable-Agent2Agent-LangGraph-AI-System)
-
-**Plan-Execute 模式**：
-- [LangChain Plan-and-Execute Agents](https://blog.langchain.com/planning-agents/)
-- [LangGraph Plan-Execute Tutorial](https://github.com/langchain-ai/langgraph/discussions/571)
-- [Agentic RAG with LangGraph](https://www.learnwithparam.com/blog/agentic-rag-langgraph-planning-rewriting-tool-use)
-
-**MCP 协议**：
-- [Model Context Protocol 官网](https://modelcontextprotocol.io/)
-- [MCP Python SDK](https://github.com/anthropics/python-mcp-sdk)
-
-**LangGraph 官方文档**：
-- [LangGraph Overview](https://docs.langchain.com/oss/python/langgraph/overview)
-- [Workflows and Agents](https://docs.langchain.com/oss/python/langgraph/workflows-agents)
-
----
-
-## 🚀 下一步
-
-### 立即行动（开发团队）
-1. **阅读文档** - 查看 ARCHITECTURE_V2.md 了解最新架构
-2. **启动 LLM 服务** - 启动 vLLM 以验证端到端流程
-3. **执行阶段3** - 根据 ROADMAP.md 开始 RAG 知识库集成
-
-### 并行开发（其他部门）
-1. **准备知识库文档** - 上传规章制度 PDF（5-10份）
-2. **部署 RAGFlow** - 按照 ROADMAP.md 指引部署
-3. **准备测试数据** - 准备验收测试的问答对
-
-### 迭代集成
-按阶段 2 → 3 → 4 → 5 逐步完善功能，每个阶段完成后更新文档。
+**阶段总结**（`plan/`）
+- `STAGE_2_5_1_COMPLETION_SUMMARY.md` — 真实平台对接
+- `RAG_COMPLETION_SUMMARY.md` — RAG 知识库集成
+- `SHORT_TERM_MEMORY_COMPLETION_REPORT.md` — 短期记忆
+- `MEMORY_PERSISTENCE_OPTIMIZATION_COMPLETION_REPORT.md` — Redis 记忆持久化
 
 ---
 
 ## 🔧 故障排查
 
-### Q: MCP Server 调用失败？
-1. 检查 `mcp_servers/config.yaml` 配置
-2. 测试 MCP Server 单独运行：`python -m mcp_servers.ksipms_server`
-3. 查看审计日志：`sqlite3 data/ksipms_dev.db "SELECT * FROM audit_log;"`
-4. 启用详细日志：`logger.level = DEBUG`
+**MCP 调用失败**
+1. 确认真实 MCP Server 可达：`curl http://127.0.0.1:6620/mcp`
+2. `/health` 查看 `mcp_online` 状态；`mcp_watcher` 会自动重连
+3. 弱网下 T5 重试会自动指数退避（日志 `[MCP] 第N次失败…重试`）
 
-### Q: Planner 找不到工具？
+**Planner 找不到工具**
 ```python
-# 检查 Skill Registry
 from skills import get_skill_registry
-registry = get_skill_registry()
-skills = registry.list_skills()
-print([s.id for s in skills])
+print([s.id for s in get_skill_registry().list_skills()])
 ```
 
-### Q: 端到端测试失败？
-1. 确认 LLM 服务运行：`curl http://127.0.0.1:8002/v1/models`
-2. 查看 FastAPI 日志：`tail -f logs/app.log`
-3. 运行单元测试：`pytest tests/test_e2e_simple.py -v`
+**提示词改动验收**
+```bash
+python -m eval.run_planner_eval   # 看 baseline diff，有回退则退出码 1
+```
+
+**LLM 不可达**
+```bash
+curl http://127.0.0.1:8004/v1/models
+```
 
 ---
 
-## 📊 性能指标（当前）
+## 🤝 贡献与维护
 
-| 指标 | 目标 | 当前（阶段2） |
-|------|------|--------------|
-| API 响应延迟 (P95) | < 3s | ~2.5s |
-| Planner 耗时 | < 1s | ~800ms |
-| MCP 调用延迟 | < 50ms | ~10ms (临时方案) |
-| Executor 耗时 | < 500ms | ~300ms |
-| 端到端准确率 | > 85% | 待验证（需 LLM） |
+- 改提示词/规划逻辑前后必跑 `eval/`，禁止破坏防幻觉规则与语义区分
+- 新增 MCP 工具时同步补 `streaming.py` 的进度文案（T7 已有启动期自检）
+- 改 `nodes.py` 遵循"叠加不重写"，保留配置开关以便灰度回退
+- 并行开发先 `git pull --rebase`，合并后跑 T0 回归再推送
 
 ---
 
-## 🤝 贡献指南
-
-1. **阅读开发手册** - [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
-2. **开发新 Skill** - 按照手册第2章操作
-3. **开发 MCP Server** - 按照手册第3章操作
-4. **测试** - 编写单元测试和集成测试
-5. **文档** - 更新相应文档
-
----
-
-**项目维护**: KSAgent 开发团队  
-**最后更新**: 2026-06-10  
-**版本**: v3.2 (阶段2.5.1已完成 + 真实平台对接完成)
+**项目维护**: KSAgent 开发团队
+**最后更新**: 2026-06-30
+**版本**: v4.0（真实平台 + RAG + 记忆 + P0 时延 + 方向三 全部完成）
