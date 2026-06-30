@@ -14,7 +14,7 @@
     snapshot_url       -> events[].img_path（相对路径，需拼 om_base_url）
     ts_event(epoch)    -> events[].created_at（"yyyy-MM-dd HH:mm:ss"）
     camera_id          -> events[].camera_uuid 或 events[].camera_name
-    status: closed/false_alarm  -> ai_event_deal.review_status: 2(已复核)/3(已完成)/5(误报)
+    status: closed/false_alarm  -> ai_event_deal.review_status: 1(复核误报)/2(复核告警)/3(未复核)
 """
 import asyncio
 import base64
@@ -90,6 +90,11 @@ async def aggregate_alarms_impl(args: dict, context: dict) -> dict:
     if lv := args.get("level"):
         base_args["level"] = lv
 
+    camera_name = (args.get("camera_name") or args.get("camera") or "").strip()
+    camera_filter_name: str | None = camera_name or None
+    if camera_name:
+        base_args["camera_name"] = camera_name
+
     # 自动分页拉取全量数据（并发翻页优化）
     # 使用通用并发翻页模块，替代串行拉取
     PAGE_SIZE = 10000
@@ -142,7 +147,7 @@ async def aggregate_alarms_impl(args: dict, context: dict) -> dict:
         items = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
 
     data = [{"key": k, "count": v} for k, v in items]
-    return {
+    out = {
         "group_by": group_by,
         "data": data,
         "total": sum(v for _, v in items),
@@ -150,6 +155,9 @@ async def aggregate_alarms_impl(args: dict, context: dict) -> dict:
         "sampled": total > len(events),
         "error": None,
     }
+    if camera_filter_name:
+        out["camera_name"] = camera_filter_name
+    return out
 
 
 # ===================== Skill 2: 可视化 =====================
@@ -277,10 +285,10 @@ async def fetch_alarm_context_impl(args: dict, context: dict) -> dict:
 
 
 # ===================== Skill 4: 状态回写（包装 ai_event_deal） =====================
-# verdict -> review_status（真实平台语义，见 tool_meta：1=确认 2=完成 3=误报 5=忽略）
+# verdict -> review_status（与 KSIpms 前端 eventAlarmOption 一致：1=误报 2=告警）
 _VERDICT_TO_REVIEW_STATUS = {
-    "confirmed": 2,   # 确认有效，标记为已复核完成
-    "rejected": 3,    # 误报
+    "confirmed": 2,   # 复核告警
+    "rejected": 1,    # 复核误报
 }
 
 
@@ -342,6 +350,7 @@ def register_alarm_skills(registry):
         description=(
             "聚合统计 AI 视觉告警（基于真实平台 ai_event_list）。"
             "group_by 取值：event_name(中文名,推荐)/event_type(算法编码)/date(按天)/camera(按摄像机)/level(级别)。"
+            "可按 camera_name 筛选某摄像机或地点（如「公司大门口」）。"
             "时间格式 YYYY-MM-DD（自动补全时分秒）。返回 data 列表供 visualize_alarms 使用。"
         ),
         parameters={"type": "object", "properties": {
@@ -350,7 +359,10 @@ def register_alarm_skills(registry):
                          "default": "event_name"},
             "date_start": {"type": "string", "description": "起始日期 YYYY-MM-DD（可选）"},
             "date_end": {"type": "string", "description": "结束日期 YYYY-MM-DD（可选，含当天）"},
-            "event_type": {"type": "string", "description": "筛选特定算法编码（如 ET03007）"},
+            "time_start": {"type": "string", "description": "起始时间 yyyy-MM-dd HH:mm:ss（可选）"},
+            "time_end": {"type": "string", "description": "结束时间 yyyy-MM-dd HH:mm:ss（可选）"},
+            "camera_name": {"type": "string", "description": "摄像机或地点名称，如「公司大门口」"},
+            "event_type": {"type": "string", "description": "筛选特定算法编码（如 ET03007）；用户未指定类型时不要传"},
             "level": {"type": "string", "description": "告警级别 red/orange/yellow/blue（可选）"},
         }},
         implementation=aggregate_alarms_impl, skill_type=SkillType.TOOL,
@@ -385,8 +397,8 @@ def register_alarm_skills(registry):
         id="update_alarm_status", name="回写 AI 告警复核状态",
         description=(
             "将复判结论写回平台（ai_event_deal）。推荐传 verdict=\"{{step_N.verdict}}\" "
-            "引用复判子图输出，自动映射：confirmed→review_status=2(已复核完成)、"
-            "rejected→review_status=3(误报)。也可直接传 review_status (1-5)。"
+            "引用复判子图输出，自动映射：confirmed→review_status=2(复核告警)、"
+            "rejected→review_status=1(复核误报)。也可直接传 review_status (1-4)。"
         ),
         parameters={"type": "object", "properties": {
             "alarm_uuid": {"type": "string", "description": "单个事件 UUID"},
@@ -395,7 +407,7 @@ def register_alarm_skills(registry):
             "verdict": {"type": "string",
                         "description": "复判结论 confirmed/rejected（推荐用 {{step_N.verdict}}）"},
             "review_status": {"type": "integer",
-                              "description": "直接指定 1=确认 2=已复核 3=误报 5=忽略（与 verdict 二选一）"},
+                              "description": "直接指定 1=复核误报 2=复核告警 3=未复核 4=已复核（与 verdict 二选一）"},
             "note": {"type": "string", "description": "复判备注（写入 remark）"},
         }, "required": ["alarm_uuid"]},
         implementation=update_alarm_status_impl, skill_type=SkillType.TOOL,

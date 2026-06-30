@@ -15,6 +15,7 @@
 注意：event_name 取自后端注释，与 ai_event_list 实际返回的 event_name 可能有细微
 差异（如"未戴安全帽告警" vs "未戴安全帽"），匹配以 event_type 编码为准。
 """
+import re
 
 # event_type 编码 → 中文显示名（平台支持的全部算法类型）
 SUPPORTED_EVENT_TYPES: dict[str, str] = {
@@ -53,6 +54,25 @@ SUPPORTED_EVENT_TYPES: dict[str, str] = {
 # 反向索引：中文名 → 编码（便于按名称查编码；名称去掉"告警"后缀后比较）
 NAME_TO_TYPE: dict[str, str] = {v: k for k, v in SUPPORTED_EVENT_TYPES.items()}
 
+# 口语别名 → 编码（补充正式名称，长词优先匹配）
+EVENT_TYPE_ALIASES: dict[str, str] = {
+    "违规抽烟": "ET03002",
+    "抽烟": "ET03002",
+    "吸烟": "ET03002",
+    "未戴安全帽": "ET03007",
+    "安全帽": "ET03007",
+    "使用手机": "ET03009",
+    "玩手机": "ET03009",
+    "手机": "ET03009",
+    "接打电话": "ET03001",
+    "打电话": "ET03001",
+    "未戴口罩": "ET03004",
+    "口罩": "ET03004",
+    "明火": "ET05001",
+    "烟雾": "ET05002",
+    "灭火器": "ET05003",
+}
+
 
 def is_supported(event_type: str | None) -> bool:
     """该 event_type 编码是否为平台支持的算法类型。"""
@@ -64,6 +84,41 @@ def display_name(event_type: str | None, fallback: str | None = None) -> str:
     if event_type and event_type in SUPPORTED_EVENT_TYPES:
         return SUPPORTED_EVENT_TYPES[event_type]
     return fallback or (event_type or "未知类型")
+
+
+def normalize_event_type(raw: str | None) -> str | None:
+    """将 Planner 可能输出的混写值规范为 ET 编码（如「未戴安全帽(ET03007)」→ ET03007）。"""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if m := re.search(r"(ET\d{5})", s, re.I):
+        code = m.group(1).upper()
+        if code in SUPPORTED_EVENT_TYPES:
+            return code
+    if s in SUPPORTED_EVENT_TYPES:
+        return s
+    if s in NAME_TO_TYPE:
+        return NAME_TO_TYPE[s]
+    for name, code in sorted(NAME_TO_TYPE.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if name in s or s in name:
+            return code
+    if s in EVENT_TYPE_ALIASES:
+        return EVENT_TYPE_ALIASES[s]
+    return None
+
+
+def resolve_event_type_from_text(text: str) -> str | None:
+    """从用户原话中解析 event_type 编码（长词优先，避免「手机」误匹配）。"""
+    text = (text or "").strip()
+    if not text:
+        return None
+    for alias, code in sorted(EVENT_TYPE_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if alias in text:
+            return code
+    for name, code in sorted(NAME_TO_TYPE.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if name in text:
+            return code
+    return None
 
 
 def catalog_lines() -> str:

@@ -122,6 +122,9 @@ def _format_skills_grouped(skills) -> str:
 #     "是否有数据"则交给实际查询 ai_event_list 的 total 判断（formatter 空结果守卫处理）。
 from skills.event_types import (
     catalog_inline as _supported_catalog_inline,
+    normalize_event_type,
+    resolve_event_type_from_text,
+    display_name as _event_display_name,
 )
 
 
@@ -142,9 +145,289 @@ def _planner_catalog_block(user_message: str) -> str:
     return (
         "# AI 告警类型（event_type 必取自平台字典，禁止编造）\n"
         f"支持类型：{names}\n"
-        "规则：语义能匹配→`ai_event_list`+event_type；平台不支持→direct_response；"
-        "支持但暂无数据仍须查询后据实回复。"
+        "规则：\n"
+        "- 用户明确提到某类算法（如未戴安全帽/抽烟/使用手机）→ 带 event_type=ET编码（仅 ET03007 这种，禁止中文或「名称(编码)」混写）\n"
+        "- 用户说「统计…告警/事件」且指明类型 → aggregate_alarms（event_type=ET编码，group_by=camera，补全今天 time_start/time_end）\n"
+        "- 用户只说「AI告警/告警事件/统计告警」未指具体类型 → 禁止传 event_type\n"
+        "- 按摄像机/地点统计 → aggregate_alarms（group_by=event_name，camera_name 从原话提取）\n"
+        "- 平台不支持的类型 → direct_response；支持但暂无数据仍须查询后据实回复"
     )
+
+
+# 口语里常见的算法别名（补充 event_types 字典里的正式名称）
+_EVENT_TYPE_HINTS = (
+    "安全帽", "抽烟", "口罩", "护目镜", "安全带", "工作服", "明火", "烟雾", "灭火器",
+    "离岗", "入侵", "聚集", "徘徊", "跌倒", "打瞌睡", "打架", "攀爬", "打电话", "手机",
+    "人脸",
+)
+
+
+def _user_mentions_specific_event_type(msg: str) -> bool:
+    """用户是否明确提到了某一类 AI 算法（而非泛指的「AI告警」）。"""
+    from skills.event_types import SUPPORTED_EVENT_TYPES
+    text = (msg or "").strip()
+    if not text:
+        return False
+    for name in SUPPORTED_EVENT_TYPES.values():
+        if name in text:
+            return True
+    return any(h in text for h in _EVENT_TYPE_HINTS)
+
+
+def _extract_camera_hint_from_message(msg: str) -> str | None:
+    """从「统计公司大门口今天的AI告警」类问句中提取摄像机/地点名。"""
+    import re
+    s = (msg or "").strip()
+    if not s:
+        return None
+    for pat in (
+        r"^(?:请|帮我|帮忙|查一下|查询|查看|列出|显示|统计)?",
+        r"(?:今天|昨天|前天|明日|\d{4}-\d{2}-\d{2})(?:的)?",
+        r"(?:最近\d+天?)(?:的)?",
+        r"(?:的)?(?:AI|ai)?(?:视觉)?(?:算法)?告警(?:事件|记录|情况|数据)?",
+        r"(?:有多少|多少条|数量|分布|明细|汇总|统计)?$",
+    ):
+        s = re.sub(pat, "", s).strip()
+    s = s.strip("的 ，,、")
+    if len(s) < 2:
+        return None
+    from skills.event_types import SUPPORTED_EVENT_TYPES
+    if any(s == name or s in name for name in SUPPORTED_EVENT_TYPES.values()):
+        return None
+    return s
+
+
+def _ensure_today_time_range(args: dict, msg: str) -> dict:
+    """用户提到「今天」且未指定时间时，自动补全当日 00:00:00–23:59:59。"""
+    if "今天" not in (msg or ""):
+        return args
+    if any(args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+        return args
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    args["time_start"] = f"{today} 00:00:00"
+    args["time_end"] = f"{today} 23:59:59"
+    return args
+
+
+def _message_text(msg) -> str:
+    """兼容 BaseMessage / 多模态 content 的纯文本提取。"""
+    content = getattr(msg, "content", "")
+    if isinstance(content, list):
+        parts = []
+        for seg in content:
+            if isinstance(seg, dict):
+                if seg.get("type") == "text" or "text" in seg:
+                    parts.append(str(seg.get("text", "")))
+            else:
+                parts.append(str(seg))
+        content = " ".join(p for p in parts if p)
+    return str(content or "").strip()
+
+
+def _infer_relative_time_range(msg: str) -> dict | None:
+    """从用户原话里提取相对时间范围，供多轮上下文继承使用。"""
+    from datetime import datetime, timedelta
+
+    s = (msg or "").strip()
+    if not s:
+        return None
+
+    now = datetime.now()
+    if "今天" in s:
+        day = now.strftime("%Y-%m-%d")
+        return {"time_start": f"{day} 00:00:00", "time_end": f"{day} 23:59:59"}
+    if "昨天" in s:
+        day = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        return {"time_start": f"{day} 00:00:00", "time_end": f"{day} 23:59:59"}
+    if "前天" in s:
+        day = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+        return {"time_start": f"{day} 00:00:00", "time_end": f"{day} 23:59:59"}
+
+    m = re.search(r"最近\s*(\d+)\s*天", s)
+    if m:
+        days = max(1, int(m.group(1)))
+        start = (now - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+        end = now.strftime("%Y-%m-%d %H:%M:%S")
+        return {"time_start": start, "time_end": end}
+
+    return None
+
+
+def _user_has_time_hint(msg: str) -> bool:
+    return _infer_relative_time_range(msg) is not None
+
+
+def _user_wants_followup_context(msg: str) -> bool:
+    text = (msg or "").strip()
+    return any(k in text for k in (
+        "前3条", "前几条", "最新", "最近一条", "最新一条", "这条", "那条", "它", "这个",
+        "刚才", "上一条", "上次", "继续", "再查", "再看", "同样", "相同", "沿用",
+    ))
+
+
+def _extract_pagesize_from_message(msg: str) -> int | None:
+    """从用户原话里提取最近/前 N 条的页大小。"""
+    text = (msg or "").strip()
+    if not text:
+        return None
+    if any(k in text for k in ("最新", "最近一条", "最新一条", "最后一条")):
+        return 1
+    m = re.search(r"前\s*(\d+)\s*条", text)
+    if m:
+        return max(1, int(m.group(1)))
+    if "前几条" in text:
+        return 3
+    return None
+
+
+def _extract_alarm_context_from_history(messages) -> dict:
+    """从会话历史提取最近一次明确的告警类型与时间范围。"""
+    ctx = {"event_type": None, "time_range": None}
+    for msg in messages or []:
+        if not isinstance(msg, HumanMessage):
+            continue
+        text = _message_text(msg)
+        if not text:
+            continue
+        if et := resolve_event_type_from_text(text):
+            ctx["event_type"] = et
+        if tr := _infer_relative_time_range(text):
+            ctx["time_range"] = tr
+    return ctx
+
+
+def _user_wants_stats(msg: str) -> bool:
+    return any(k in (msg or "") for k in ("统计", "多少", "数量", "分布", "汇总", "共"))
+
+
+def _normalize_alarm_plan(plan: list, user_message: str, history_messages=None) -> list:
+    """修正 Planner 计划：规范 event_type、统计类查询走 aggregate_alarms。"""
+    if not plan:
+        return plan
+
+    msg = user_message or ""
+    stats_kw = _user_wants_stats(msg)
+    alarm_kw = any(k in msg for k in ("告警", "报警", "AI", "事件"))
+    resolved_from_msg = resolve_event_type_from_text(msg)
+    history_ctx = _extract_alarm_context_from_history(history_messages or [])
+
+    # 逐步规范 event_type
+    for task in plan:
+        args = dict(task.get("args") or {})
+        if raw_et := args.get("event_type"):
+            if norm := normalize_event_type(raw_et):
+                args["event_type"] = norm
+        elif resolved_from_msg and (_user_mentions_specific_event_type(msg) or stats_kw):
+            args["event_type"] = resolved_from_msg
+        elif history_ctx.get("event_type") and _user_wants_followup_context(msg) and not _user_has_time_hint(msg):
+            args["event_type"] = history_ctx["event_type"]
+        task["args"] = args
+
+    if len(plan) != 1:
+        return plan
+
+    task = plan[0]
+    tool = task.get("task", "")
+    args = dict(task.get("args") or {})
+    camera_hint = args.get("camera_name") or _extract_camera_hint_from_message(msg)
+    resolved_et = args.get("event_type") or resolved_from_msg or history_ctx.get("event_type")
+    time_hint = _infer_relative_time_range(msg) or history_ctx.get("time_range")
+    pagesize_hint = _extract_pagesize_from_message(msg)
+
+    # 历史跟进问题（如「查询最新一条告警事件」）即使本轮没写明类型，也沿用上一轮告警类型。
+    if (
+        history_ctx.get("event_type")
+        and _user_wants_followup_context(msg)
+        and alarm_kw
+        and tool in ("direct_response", "stream_chat")
+    ):
+        follow_args: dict = {"event_type": history_ctx["event_type"]}
+        if pagesize_hint is not None:
+            follow_args["pagesize"] = pagesize_hint
+        if time_hint:
+            follow_args.update(time_hint)
+        elif history_ctx.get("time_range"):
+            follow_args.update(history_ctx["time_range"])
+        else:
+            _ensure_today_time_range(follow_args, msg)
+        logger.info(f"[Planner] 历史跟进问题 → ai_event_list {follow_args}")
+        return [{"task": "ai_event_list", "args": follow_args, "status": "pending"}]
+
+    # 统计 + 明确类型 → aggregate_alarms（按摄像头分布）
+    if stats_kw and resolved_et and tool in ("ai_event_list", "aggregate_alarms"):
+        new_args: dict = {
+            "event_type": resolved_et,
+            "group_by": args.get("group_by") or "camera",
+        }
+        if pagesize_hint is not None:
+            new_args["pagesize"] = pagesize_hint
+        if camera_hint:
+            new_args["camera_name"] = camera_hint
+        for k in ("time_start", "time_end", "date_start", "date_end", "level", "review_status"):
+            if v := args.get(k):
+                new_args[k] = v
+        if time_hint and not any(new_args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+            new_args.update(time_hint)
+        _ensure_today_time_range(new_args, msg)
+        logger.info(f"[Planner] 统计类查询 → aggregate_alarms event_type={resolved_et} {new_args}")
+        return [{"task": "aggregate_alarms", "args": new_args, "status": "pending"}]
+
+    if tool == "ai_event_list" and args.get("event_type") and not _user_mentions_specific_event_type(msg):
+        if stats_kw and alarm_kw:
+            new_args: dict = {"group_by": "event_name"}
+            if pagesize_hint is not None:
+                new_args["pagesize"] = pagesize_hint
+            if camera_hint:
+                new_args["camera_name"] = camera_hint
+            for k in ("time_start", "time_end", "date_start", "date_end", "level", "review_status"):
+                if v := args.get(k):
+                    new_args[k] = v
+            if time_hint and not any(new_args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+                new_args.update(time_hint)
+            if "今天" in msg and not any(new_args.get(k) for k in ("time_start", "date_start")):
+                _ensure_today_time_range(new_args, msg)
+            logger.info(f"[Planner] 修正误解析：ai_event_list+event_type → aggregate_alarms {new_args}")
+            return [{"task": "aggregate_alarms", "args": new_args, "status": "pending"}]
+
+    if tool == "ai_event_list" and resolved_et:
+        args["event_type"] = resolved_et
+        if pagesize_hint is not None:
+            args["pagesize"] = pagesize_hint
+        if time_hint and not any(args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+            args.update(time_hint)
+        _ensure_today_time_range(args, msg)
+        return [{"task": tool, "args": args, "status": "pending"}]
+
+    if tool == "aggregate_alarms":
+        if resolved_et:
+            args["event_type"] = resolved_et
+        if pagesize_hint is not None:
+            args["pagesize"] = pagesize_hint
+        if time_hint and not any(args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+            args.update(time_hint)
+        _ensure_today_time_range(args, msg)
+        if camera_hint and not args.get("camera_name"):
+            args["camera_name"] = camera_hint
+        return [{"task": tool, "args": args, "status": "pending"}]
+
+    if history_ctx.get("event_type") and tool in ("ai_event_list", "aggregate_alarms"):
+        if not args.get("event_type"):
+            args["event_type"] = history_ctx["event_type"]
+        if pagesize_hint is not None:
+            args["pagesize"] = pagesize_hint
+        if time_hint and not any(args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+            args.update(time_hint)
+        elif history_ctx.get("time_range") and not any(args.get(k) for k in ("time_start", "time_end", "date_start", "date_end")):
+            args.update(history_ctx["time_range"])
+        if tool == "aggregate_alarms":
+            if not args.get("group_by"):
+                args["group_by"] = "camera"
+            if camera_hint and not args.get("camera_name"):
+                args["camera_name"] = camera_hint
+        return [{"task": tool, "args": args, "status": "pending"}]
+
+    return plan
 
 
 def planner_node(state: AgentState) -> Dict[str, Any]:
@@ -246,6 +529,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                 }
 
         # 统一后处理（两条路径汇合）
+        plan = _normalize_alarm_plan(plan, state["user_message"], state.get("messages", []))
         _tasks = [t.get("task", "") for t in plan]
         if _tasks and _tasks != ["direct_response"] and _tasks != ["stream_chat"]:
             emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
@@ -550,13 +834,14 @@ def _analyze_events(events: list) -> dict:
         stats['event_types'][e.get('event_type', 'unknown')] += 1
         stats['event_names'][e.get('event_name', e.get('event_type', 'unknown'))] += 1
 
-        # 等级
-        stats['levels'][e.get('level', 'unknown')] += 1
+        # 等级（展示用中文标签）
+        from skills.ai_labels import level_label as _level_label
+        stats['levels'][_level_label(e.get('level'))] += 1
 
-        # 复核状态
+        # 复核状态（与 KSIpms eventReviewStatusLabel 一致）
+        from skills.ai_labels import review_status_label as _rs_label
         rs = e.get('review_status', 'unknown')
-        rs_map = {1: '待复核', 2: '已复核', 3: '已完成', 5: '误报', '1': '待复核', '2': '已复核', '3': '已完成', '5': '误报'}
-        stats['review_status'][rs_map.get(rs, str(rs))] += 1
+        stats['review_status'][_rs_label(rs) if rs not in (None, '', 'unknown') else 'unknown'] += 1
 
         # 摄像头/设备
         if cam := e.get('camera_name'):
@@ -627,10 +912,13 @@ def _generate_event_summary_chart(stats: dict) -> str | None:
         ax2 = axes[0, 1]
         level_data = stats['levels']
         if level_data:
+            from skills.ai_labels import LEVEL_LABEL
             level_color_map = {'red': '#dc3545', 'orange': '#fd7e14', 'yellow': '#ffc107', 'blue': '#0d6efd', 'unknown': '#6c757d'}
+            # 反向映射：中文标签 -> 颜色
+            cn_to_color = {v: level_color_map.get(k, '#6c757d') for k, v in LEVEL_LABEL.items()}
             labels = list(level_data.keys())
             sizes = list(level_data.values())
-            colors_l = [level_color_map.get(l, '#6c757d') for l in labels]
+            colors_l = [cn_to_color.get(l, level_color_map.get(l, '#6c757d')) for l in labels]
             ax2.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors_l, startangle=90)
             ax2.set_title('告警等级分布', fontsize=11)
         else:
@@ -1074,6 +1362,263 @@ def _format_video_play_record_response(user_message: str, tool_result: dict) -> 
     return "\n".join(lines)
 
 
+def _strip_om_route_prefix(path: str) -> str:
+    """去掉 OM/静态资源路径中多余的 nginx 路由前缀（如 main/），避免前端 VITE_API 重复拼接。"""
+    p = (path or "").strip().lstrip("/")
+    if p.startswith("main/ai_data/"):
+        return p[5:]
+    if p.startswith("main/") and "ai_data/" in p:
+        idx = p.find("ai_data/")
+        return p[idx:]
+    return p
+
+
+def _normalize_event_video_path(video_path: str) -> str:
+    """与 KSIpms AiHandleDialog.buildEventVideoUrl 一致：补全 ai_data/event_video 前缀。"""
+    path = (video_path or "").strip()
+    if not path or path.startswith(("http://", "https://")):
+        return path
+    normalized = _strip_om_route_prefix(path)
+    if normalized.startswith("ai_data/"):
+        return normalized
+    return f"ai_data/event_video/{normalized}"
+
+
+def _normalize_event_image_path(img_path: str) -> str:
+    path = (img_path or "").strip()
+    if not path:
+        return ""
+    if path.startswith(("http://", "https://")):
+        return path
+    return _strip_om_route_prefix(path)
+
+
+def _format_llm_result_line(event: dict) -> str | None:
+    llm = event.get("llm_result")
+    if not llm:
+        return None
+    if isinstance(llm, str):
+        return f"**AI 判断结果**：{llm}"
+    if not isinstance(llm, dict):
+        return None
+    result = llm.get("result") or llm.get("verdict") or llm.get("label")
+    desc = llm.get("description") or llm.get("reason") or llm.get("reasoning") or ""
+    conf = llm.get("confidence")
+    parts = []
+    if result is not None:
+        parts.append(str(result))
+    if desc:
+        parts.append(str(desc))
+    line = "，".join(parts) if parts else "—"
+    if conf is not None:
+        try:
+            conf_str = f"{float(conf):.6f}".rstrip("0").rstrip(".")
+            line += f"（AI 置信度 {conf_str}）"
+        except (TypeError, ValueError):
+            line += f"（AI 置信度 {conf}）"
+    return f"**AI 判断结果**：{line}"
+
+
+def _append_alarm_media_block(lines: list[str], event: dict, title_prefix: str = "") -> None:
+    """追加告警图片/视频预览链接（xiaoke-alarm-media 元数据 + Markdown 链接）。"""
+    media_meta: dict[str, dict] = {}
+    img_path = _normalize_event_image_path(event.get("img_path") or "")
+    video_path = _normalize_event_video_path(event.get("video_path") or "")
+
+    if img_path:
+        media_meta["image"] = {
+            "type": "image",
+            "path": img_path,
+            "title": f"{title_prefix}告警图片".strip(),
+        }
+    if video_path:
+        media_meta["video"] = {
+            "type": "video",
+            "path": video_path,
+            "title": f"{title_prefix}告警视频".strip(),
+        }
+    if not media_meta:
+        return
+
+    link_parts = []
+    if "image" in media_meta:
+        link_parts.append("[查看告警图片](xiaoke-alarm-media:image)")
+    if "video" in media_meta:
+        link_parts.append("[查看告警视频](xiaoke-alarm-media:video)")
+    if link_parts:
+        lines.append(f"**告警媒体**：{' · '.join(link_parts)}")
+    lines.append(
+        "\n<!-- xiaoke-alarm-media:"
+        + json.dumps(media_meta, ensure_ascii=False)
+        + " -->"
+    )
+
+
+def _format_single_ai_event_lines(event: dict, *, heading: str | None = None) -> list[str]:
+    """格式化单条 AI 告警（字段标签与 KSIpms 前端一致）。"""
+    from skills.ai_labels import level_label, review_status_label, workflow_status_label
+
+    lines: list[str] = []
+    if heading:
+        lines.append(heading)
+
+    event_name = event.get("event_name") or event.get("event_type") or "未知类型"
+    event_type = event.get("event_type") or ""
+    if event_type and event_type != event_name:
+        lines.append(f"**告警类型**：{event_name}（事件类型：{event_type}）")
+    else:
+        lines.append(f"**告警类型**：{event_name}")
+
+    if created_at := event.get("created_at"):
+        lines.append(f"**告警时间**：{created_at}")
+
+    level = event.get("level")
+    if level:
+        lines.append(f"**告警级别**：{level_label(level)}（{level}）")
+
+    device_name = event.get("device_name") or "未知设备"
+    device_uuid = event.get("device_uuid") or ""
+    if device_uuid:
+        lines.append(f"**告警设备**：{device_name}（设备 UUID: {device_uuid}）")
+    else:
+        lines.append(f"**告警设备**：{device_name}")
+
+    camera_name = event.get("camera_name") or ""
+    camera_uuid = event.get("camera_uuid") or ""
+    if camera_name:
+        if camera_uuid:
+            lines.append(f"**摄像头名称**：{camera_name}（摄像头 UUID: {camera_uuid}）")
+        else:
+            lines.append(f"**摄像头名称**：{camera_name}")
+
+    if llm_line := _format_llm_result_line(event):
+        lines.append(llm_line)
+
+    wf = workflow_status_label(event.get("status"))
+    rs = review_status_label(event.get("review_status"))
+    lines.append(f"**处理状态**：{wf}")
+    if event.get("review_status") is not None:
+        lines.append(f"**复核结果**：{rs}（review_status: {event.get('review_status')}）")
+
+    title_prefix = event_name if event_name != "未知类型" else ""
+    _append_alarm_media_block(lines, event, title_prefix=title_prefix)
+    return lines
+
+
+def _format_event_stats_summary(events: list, total: int, user_message: str) -> str:
+    """将 ai_event_list 结果格式化为统计报告（按摄像头/时段分布）。"""
+    from collections import Counter
+
+    msg = user_message or ""
+    type_name = ""
+    if events and isinstance(events[0], dict):
+        type_name = events[0].get("event_name") or events[0].get("event_type") or ""
+
+    lines = ["## 📊 告警统计结果"]
+    if type_name:
+        lines.append(f"**告警类型**：{type_name}")
+    time_hint = "今天" if "今天" in msg else ("昨天" if "昨天" in msg else "")
+    if time_hint:
+        lines.append(f"**统计范围**：{time_hint}")
+    lines.append(f"**合计**：共 **{total}** 条\n")
+
+    if total > len(events):
+        lines.append(f"> 以下分布基于已拉取的 {len(events)} 条样本\n")
+
+    by_camera = Counter(
+        (e.get("camera_name") or "未知摄像头") for e in events if isinstance(e, dict)
+    )
+    if by_camera:
+        lines.append("### 按摄像头分布")
+        for cam, cnt in by_camera.most_common():
+            pct = cnt / total * 100 if total else 0
+            bar = "█" * max(1, int(pct / 5))
+            lines.append(f"- **{cam}**：{cnt} 条 ({pct:.1f}%) {bar}")
+        lines.append("")
+
+    by_hour = Counter()
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        ca = e.get("created_at") or ""
+        if len(ca) >= 13:
+            try:
+                by_hour[int(ca[11:13])] += 1
+            except ValueError:
+                pass
+    if by_hour:
+        lines.append("### 时段分布（按小时）")
+        for h in sorted(by_hour):
+            lines.append(f"- {h:02d}:00–{h:02d}:59：{by_hour[h]} 条")
+
+    return "\n".join(lines)
+
+
+def _format_ai_event_list_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+
+    events = result.get("events") or []
+    if not isinstance(events, list) or not events:
+        return None
+
+    total = result.get("total", len(events))
+    try:
+        total = int(total)
+    except (TypeError, ValueError):
+        total = len(events)
+
+    msg = user_message or ""
+    want_stats = _user_wants_stats(msg)
+    # 统计类：输出聚合报告（不受 5 条上限限制）
+    if want_stats and not any(k in msg for k in ("最新", "最近一条", "最后一条", "详情", "明细")):
+        return _format_event_stats_summary(events, total, user_message)
+
+    # 大量非统计类数据走摘要统计路径
+    if len(events) > 5:
+        return None
+
+    want_latest = any(k in msg for k in ("最新", "最近一条", "最后一条", "最新一条"))
+    want_detail = want_latest or len(events) == 1 or any(
+        k in msg for k in ("详情", "明细", "哪一条", "那条", "这条")
+    )
+
+    if want_detail and len(events) >= 1:
+        event = events[0]
+        if not isinstance(event, dict):
+            return None
+        heading = "## 最新 AI 告警详情" if want_latest and total > 1 else "## AI 告警详情"
+        if total > len(events):
+            heading += f"\n（平台共 {total} 条，展示最新 1 条）"
+        return "\n".join(_format_single_ai_event_lines(event, heading=heading))
+
+    lines = [f"## AI 告警查询结果", f"共 **{total}** 条，展示 **{len(events)}** 条：\n"]
+    for i, event in enumerate(events[:5], 1):
+        if not isinstance(event, dict):
+            continue
+        from skills.ai_labels import level_label, review_status_label, workflow_status_label
+        name = event.get("event_name") or event.get("event_type") or "未知"
+        created = event.get("created_at") or "—"
+        cam = event.get("camera_name") or "—"
+        lines.append(
+            f"{i}. **{name}** · {created} · {cam} · "
+            f"{level_label(event.get('level'))} · 处理:{workflow_status_label(event.get('status'))} · "
+            f"复核:{review_status_label(event.get('review_status'))}"
+        )
+    return "\n".join(lines)
+
+
+def _format_ai_event_detail_response(user_message: str, tool_result: dict) -> str | None:
+    result = tool_result.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+    event = result.get("event")
+    if not isinstance(event, dict) or not event:
+        return result.get("message") or "未找到该告警详情"
+    return "\n".join(_format_single_ai_event_lines(event, heading="## AI 告警详情"))
+
+
 def _format_video_live_play_response(user_message: str, tool_result: dict) -> str | None:
     result = tool_result.get("result") or {}
     if not isinstance(result, dict):
@@ -1098,6 +1643,8 @@ def _format_video_live_play_response(user_message: str, tool_result: dict) -> st
 
 
 _STRUCTURED_MCP_FORMATTERS = {
+    "ai_event_list": _format_ai_event_list_response,
+    "ai_event_detail": _format_ai_event_detail_response,
     "video_camera_overview": _format_video_camera_overview_response,
     "record_day_calendar": _format_record_day_calendar_response,
     "video_record_find_segments": _format_video_record_segments_response,
@@ -1197,11 +1744,9 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
             # 告警等级
             if stats['levels']:
                 report.append(f"### ⚡ 告警等级")
-                level_emoji = {'red': '🔴', 'orange': '🟠', 'yellow': '🟡', 'blue': '🔵'}
                 for level, count in stats['levels'].most_common():
                     pct = count / stats['total'] * 100
-                    emoji = level_emoji.get(level, '⚪')
-                    report.append(f"- {emoji} **{level}**: {count} 条 ({pct:.1f}%)")
+                    report.append(f"- **{level}**: {count} 条 ({pct:.1f}%)")
                 report.append("")
 
             # 复核状态
@@ -1263,6 +1808,8 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
 
             if agg_data:
                 report = [f"## 📊 告警统计报告\n"]
+                if cam := result.get("camera_name"):
+                    report.append(f"**筛选摄像机**：{cam}")
                 report.append(f"**统计维度**：按{group_label}分组")
                 if sampled:
                     report.append(f"**数据规模**：平台共 {platform_total} 条，本次统计 {total} 条（采样）\n")
@@ -1270,13 +1817,18 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
                     report.append(f"**告警总数**：{total} 条（平台完整数据）\n")
 
                 report.append(f"### 分布明细")
+                from skills.ai_labels import level_label as _agg_level_label
                 for item in agg_data[:15]:
                     key = item.get('key', 'unknown')
+                    if group_by == 'level':
+                        display_key = _agg_level_label(str(key))
+                    else:
+                        display_key = key
                     count = item.get('count', 0)
                     pct = count / total * 100 if total > 0 else 0
                     # 简易文本条形（直观展示占比）
                     bar = '█' * max(1, int(pct / 5))
-                    report.append(f"- **{key}**：{count} 条 ({pct:.1f}%) {bar}")
+                    report.append(f"- **{display_key}**：{count} 条 ({pct:.1f}%) {bar}")
 
                 # 🔧 修复图表类型问题：只有在用户没用 visualize_alarms 时，才自己画柱状图
                 # 否则用户指定的 pie/line 会被覆盖
@@ -1296,7 +1848,15 @@ def _generate_summary_response(user_message: str, tool_results: list) -> dict:
 
                 response_parts.append("\n".join(report))
             else:
-                response_parts.append("❌ 未统计到符合条件的告警数据")
+                cam = result.get("camera_name")
+                et = resolve_event_type_from_text(user_message)
+                type_label = _event_display_name(et) if et else ""
+                if cam:
+                    response_parts.append(f"❌ 「{cam}」在所选时间范围内未统计到 AI 告警，共 **0 条**")
+                elif type_label:
+                    response_parts.append(f"❌ 今天未统计到「{type_label}」告警，共 **0 条**")
+                else:
+                    response_parts.append("❌ 未统计到符合条件的告警数据")
 
         elif tool_name == "visualize_alarms":
             if 'image_base64' in result:
@@ -1464,12 +2024,14 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
         # 关键区分：能走到 ai_event_list（而非 direct_response）说明 Planner 已确认
         # 该类型是"平台支持的算法类型"。因此 total==0 表示"平台支持但当前暂无此类
         # 告警记录"，而不是"平台不支持该类型"——绝不能把两者混为一谈。
-        from skills.event_types import display_name as _et_name
-        et = filt.get("event_type")
+        from skills.event_types import normalize_event_type
+        et_raw = filt.get("event_type")
+        et = normalize_event_type(et_raw) if et_raw else None
         has_time = bool(filt.get("time_start") or filt.get("time_end"))
 
         if et:
-            type_label = _et_name(et, et)
+            type_label = _event_display_name(et)
+            code_suffix = f"（{et}）" if type_label != et else ""
             if has_time:
                 cond_desc = "在所选时间范围内"
                 detail = "该类型告警在所选时间范围内暂无记录，可尝试去掉时间限制查询全部历史。"
@@ -1479,7 +2041,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
                           "但数据库中当前**暂无**该类型的告警记录。")
             logger.info(f"[Formatter] ai_event_list 空结果：支持但无数据 event_type={et} time={has_time}")
             _text = (
-                f"未查询到「{type_label}」（{et}）的告警记录{cond_desc}，共 **0 条**。\n\n"
+                f"未查询到「{type_label}」{code_suffix}的告警记录{cond_desc}，共 **0 条**。\n\n"
                 f"{detail}"
             )
             emit_token_chunked(_text)
@@ -1493,6 +2055,28 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
         )
         emit_token_chunked(_text)
         return {"final_response": _text}
+
+    # aggregate_alarms 空结果
+    _agg_results = [
+        r for r in tool_results
+        if r.get("success") and r.get("tool") == "aggregate_alarms"
+        and isinstance(r.get("result"), dict)
+    ]
+    if len(tool_results) == 1 and _agg_results:
+        agg = _agg_results[0]["result"]
+        agg_total = int(agg.get("total") or 0)
+        if agg_total == 0 and not agg.get("data"):
+            et = resolve_event_type_from_text(user_message)
+            type_label = _event_display_name(et) if et else ""
+            cam = agg.get("camera_name")
+            if cam:
+                _text = f"❌ 「{cam}」在所选时间范围内未统计到 AI 告警，共 **0 条**。"
+            elif type_label:
+                _text = f"❌ 今天未统计到「{type_label}」告警，共 **0 条**。"
+            else:
+                _text = "❌ 未统计到符合条件的告警数据。"
+            emit_token_chunked(_text)
+            return {"final_response": _text}
 
     # 构造工具结果摘要
     summary_parts = []
@@ -1536,14 +2120,8 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
         and tool_results[0].get("success")
         and tool_results[0].get("tool") in _LIST_TOOL_SPECS
     )
-    _single_structured_tool = (
-        len(tool_results) == 1
-        and tool_results[0].get("success")
-        and tool_results[0].get("tool") in _STRUCTURED_MCP_FORMATTERS
-    )
     should_use_summary = (
         not _single_list_tool
-        and not _single_structured_tool
         and (has_large_data or has_event_array or has_aggregate or len(tools_summary) > 4000)
     )
     if should_use_summary:
@@ -1566,9 +2144,11 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     system_prompt = """你是 KSIpms 综合管理平台的智能助手。根据用户问题和工具调用结果，用自然语言生成简洁清晰的回答。
 
 # 真实平台关键字段速查（解读工具结果时使用）
-- AI 事件: `events[]`，每项含 uuid / event_type / event_name / camera_name / created_at / img_path / level / review_status
-  · review_status: 1=待复核 2=已复核 3=已完成 5=误报
-  · level: red/orange/yellow/blue
+- AI 事件: `events[]`，每项含 uuid / event_type / event_name / camera_name / created_at / img_path / video_path / level / status / review_status
+  · level: red→特别重大 orange→重大 yellow→较大 blue→一般
+  · status: unconfirmed/confirmed/finished/misinformation/ignore（处理状态）
+  · review_status: 1=复核误报 2=复核告警 3=未复核 4=已复核
+  · 告警图片/视频用 `[查看告警图片](xiaoke-alarm-media:image)` 链接 + `<!-- xiaoke-alarm-media:{...} -->` 元数据
 - 视频设备: `devices[]`，每项含 uuid / device_name / device_ip / status
 - 聚合统计: `data: [{key, count}]` + `total` + `platform_total`（若 sampled=True 提示是基于采样）
 - VLM 复判: `verdict` (confirmed/rejected/uncertain) + `confidence` + `reasoning`

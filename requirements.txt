@@ -1,39 +1,66 @@
+# Python 3.10（生产环境）；勿用 3.14（mcp 对 starlette 有额外约束）
+#
 # Web 框架
-fastapi==0.95.1
+fastapi==0.136.3
 uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 websockets==13.1
+sse-starlette==3.4.4
+# starlette 由 fastapi / sse-starlette 自动解析，勿手动锁定
 
 # LangChain & LangGraph
 langchain==0.3.7
 langchain-openai==0.2.9
-langgraph==0.2.45
 langchain-community==0.3.7
+langchain-core==0.3.63
+langchain-text-splitters==0.3.8
+langgraph==0.2.45
+openai==1.109.1
 
 # 数据库
-sqlalchemy>=1.4,<2.0.36
+sqlalchemy==2.0.35
 aiomysql==0.2.0
 pymysql==1.1.1
 
 # 配置管理
 pyyaml==6.0.2
-pydantic==2.10.3
+pydantic==2.13.4
 pydantic-settings==2.6.1
 
 # HTTP 客户端
 httpx==0.28.1
 aiohttp==3.11.10
+requests==2.34.2
 
 # 工具
 python-dotenv==1.0.1
 loguru==0.7.3
 redis==5.2.1
 
+# MCP
 mcp[cli]==1.28.0
 
-# 知识库（文档解析 + 向量）
-qdrant-client>=1.7.0
-pypdf>=4.0.0
-python-docx>=1.1.0
-nltk>=3.8.0
-unstructured[doc,docx,pdf]>=0.12.0
+# 知识库（文档解析 + 向量检索）
+qdrant-client==1.18.0
+pypdf==6.14.2
+python-docx==1.2.0
+nltk==3.9.4
+unstructured[doc,docx,pdf]==0.18.32
+sentence-transformers==5.6.0
+FlagEmbedding==1.4.0
+
+# 嵌入/重排模型运行时（GPU，与生产环境对齐）
+torch==2.8.0
+torchvision==0.23.0
+transformers==4.57.6
+
+# Web 管理界面
+gradio==5.50.0
+
+# 告警可视化
+matplotlib==3.10.9
+
+# vLLM 推理服务（Qwen3-VL，独立进程，见 requirements-vllm.txt）
+
+# Agent-of-Agent 元智能体（agent/meta_agent，生产环境未装则按需安装）
+# anthropic
