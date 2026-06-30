@@ -453,10 +453,27 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     # 从 Skill Registry 获取可用工具，按平台分类组织
     registry = get_skill_registry()
     available_skills = registry.list_skills()
-    tools_text = _format_skills_compact(available_skills) or "暂无可用工具"
+    tools_text = _format_skills_grouped(available_skills) or "暂无可用工具"
 
-    catalog_block = _planner_catalog_block(state["user_message"])
-    catalog_section = f"\n{catalog_block}\n" if catalog_block else ""
+    # 注入"平台支持哪些 AI 告警类型"（权威静态字典，杜绝 LLM 凭空猜 event_type 编码）。
+    # 注意：这里是"平台支持识别的类型"，不代表数据库当前一定有该类告警记录——
+    # "有没有数据"由实际查询 ai_event_list 的结果决定（见 formatter 空结果守卫）。
+    catalog_text = _supported_catalog_lines()
+    catalog_names = _supported_catalog_inline()
+    catalog_block = f"""# 🎯 平台支持的 AI 告警类型（唯一权威清单，来自平台算法定义）
+**只有以下类型平台才能识别，event_type 编码必须从这里取，严禁编造或臆测其它编码：**
+{catalog_text}
+
+**类型匹配与防幻觉规则（极其重要，必须严格遵守）**：
+1. 先把用户说的告警名**语义匹配**到上表（例：吸烟/抽烟→违规抽烟 ET03002；安全帽→未戴安全帽 ET03007；
+   打电话/接电话→接打电话 ET03001；玩手机→使用手机 ET03009；打瞌睡/睡岗→打瞌睡检测 ET02007）。
+2. **能匹配到上表** → 用 `ai_event_list` 并带上对应的 `event_type`。
+   ⚠️ 此时即使该类型暂时没有数据，也**必须真的去查**，由系统根据真实返回结果如实告知
+   （"暂无此类告警记录" vs "查到 N 条"），**绝不能**自己提前断定"没有"或编造数量。
+3. **无法匹配到上表**（例如"跳舞""唱歌"等平台根本没有的算法）→ 平台不支持识别该类型，
+   **绝对不要猜一个编码去查**，直接返回：
+   `[{{"task":"direct_response","args":{{"text":"平台不支持识别「<用户所问类型>」这类告警。当前平台支持的告警类型有：{catalog_names}。"}}}}]`
+4. 区分两种"没有"：①平台不支持识别（走规则3，direct_response）；②平台支持但当前无数据（走规则2，照常查询，由系统据实回复）。绝不能把②当成①。"""
 
     # 使用 LLM 客户端单例（避免每次重新实例化）
     from utils.llm_pool import get_llm
