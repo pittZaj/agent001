@@ -131,6 +131,7 @@ def _format_skills_grouped(skills) -> str:
 #   - 新做法以平台后端算法宏定义（KSAI_* #define）为权威字典 → 准确回答"平台是否支持识别"，
 #     "是否有数据"则交给实际查询 ai_event_list 的 total 判断（formatter 空结果守卫处理）。
 from skills.event_types import (
+    catalog_lines as _supported_catalog_lines,  # 同事遗漏的导入
     catalog_inline as _supported_catalog_inline,
     normalize_event_type,
     resolve_event_type_from_text,
