@@ -26,6 +26,16 @@ PLAN_SCHEMA = {
     },
 }
 
+# T4：降级路径友好化（6.1.4）
+# planner 解析失败 / 规划异常时，对用户只展示这段友好澄清话术，绝不回显 LLM 原文或异常堆栈
+# （那会泄露内部 JSON 约定与实现细节）；原始内容仅落日志，便于排查。两处降级分支共用。
+PLANNER_FALLBACK_HINT = (
+    "抱歉，我没太理解你的问题。你可以换种方式描述，例如：\n"
+    "· 查询某类告警：「查询未戴安全帽的告警」\n"
+    "· 统计分析：「统计每种告警类型数量并画柱状图」\n"
+    "· 检索规章：「未戴安全帽违反哪些规定」"
+)
+
 
 def _first_line(text: str, limit: int = 72) -> str:
     line = (text or "").strip().split("\n")[0].strip()
@@ -538,10 +548,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                 plan = json.loads(json_match.group())
                 logger.info(f"[Planner] 生成计划（正则）: {plan}")
             else:
-                # 降级：直接回复（友好化见 T4，此处先保留原逻辑）
-                logger.warning(f"[Planner] 无法解析计划，降级为直接回复")
+                # T4：降级路径友好化 - 原始输出仅落日志，用户侧只见友好话术
+                logger.warning(f"[Planner] 无法解析计划，降级为友好提示。原始输出={content[:200]}")
                 return {
-                    "plan": [{"task": "direct_response", "args": {"text": content}, "status": "pending"}],
+                    "plan": [{"task": "direct_response", "args": {"text": PLANNER_FALLBACK_HINT}, "status": "pending"}],
                     "current_task_idx": 0,
                 }
 
@@ -557,9 +567,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        # T4：降级路径友好化 - 异常细节仅落日志与 error 字段（供 debug 面板），用户侧只见友好话术
         logger.error(f"[Planner] 规划失败: {e}")
         return {
-            "plan": [{"task": "direct_response", "args": {"text": f"规划失败: {e}"}, "status": "failed"}],
+            "plan": [{"task": "direct_response", "args": {"text": PLANNER_FALLBACK_HINT}, "status": "failed"}],
             "current_task_idx": 0,
             "error": str(e),
         }
