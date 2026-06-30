@@ -2211,6 +2211,9 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     from utils.llm_pool import get_llm
     llm = get_llm(role="formatter", temperature=0.3)
 
+    # T10：统一回答骨架（对齐 LLM 路径到结构化路径的视觉风格）
+    from graph.answer_skeleton import ANSWER_SKELETON_GUIDE
+
     system_prompt = """你是 KSIpms 综合管理平台的智能助手。根据用户问题和工具调用结果，用自然语言生成简洁清晰的回答。
 
 # 真实平台关键字段速查（解读工具结果时使用）
@@ -2230,7 +2233,8 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
 3. 不编造，只基于工具返回的真实结果
 4. 工具失败时，明确说明失败原因
 5. 涉及数字（数量/置信度等）保留原值，不要四舍五入到整数
-"""
+
+""" + ANSWER_SKELETON_GUIDE  # T10：追加统一骨架要求
 
     user_prompt = f"""用户问题：{user_message}
 
