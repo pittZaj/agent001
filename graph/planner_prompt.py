@@ -91,10 +91,10 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
   [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
    {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
 - "查最近/前 N 条 AI 告警"（⚠️ 重要：这是"查看样本"而非"统计全量"）：
-  · 传 pagesize=N（如 5/10/20），系统会**只返回 N 条**（不会自动拉全量）
-  · 注意：MCP ai_event_list 默认返回的是数据库前 N 行，不一定是"最近"N 行
-    （真实平台的 ai_event_list 工具**不支持排序参数**，这是已知限制）
-  · 示例：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":5}}}}]
+  · 传 `pagesize=N`, `recent=true`（显式标志，触发客户端按 created_at 降序排序 + 截断前 N）
+  · T6 已完成客户端排序兜底：真实平台虽不支持排序参数，但客户端会全量拉取后排序，保证返回真正最新的 N 条
+  · N 建议 ≤ 100（超阈值会提示用时间筛选以缩小候选集）
+  · 示例：[{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":5,"recent":true}}}}]
 - "查某类型的全部告警"（如"查询未戴安全帽的告警"，无时间、无数量限定）：
   · 不传 pagesize（或传大值如 10000），系统自动分页拉全量并统计
   · [{{"task":"ai_event_list","args":{{"event_type":"<清单里的真实编码>"}}}}]
@@ -109,7 +109,7 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
 以下成对样例聚焦实际问句中最易混淆的语义边界，必须严格区分：
 
 **① "最近N条"（查样本）vs "统计"（全量聚合）**
-- "查最近 10 条告警" → [{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":10}}}}]（pagesize 限数量，只返回 10 条）
+- "查最近 10 条告警" → [{{"task":"ai_event_list","args":{{"pageno":1,"pagesize":10,"recent":true}}}}]（pagesize 限数量 + recent 标志触发客户端排序，返回真正最新的 10 条）
 - "统计一共有多少告警"（只计数、未提画图）→ [{{"task":"aggregate_alarms","args":{{"group_by":"event_name"}}}}]（统计需全量，用 aggregate 而非查 N 条）
   · ⚠️ 但凡用户提到"画/画图/柱状图/饼图/折线图/趋势图"，必须在 aggregate_alarms 后**再加一步** visualize_alarms（见上方"统计画图"模板），不要只 aggregate 不画
 

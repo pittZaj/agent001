@@ -76,7 +76,7 @@ EVAL_CASES = [
         id="T06",
         query="查最近 5 条 AI 告警",
         expect_tools=["ai_event_list"],
-        expect_args_contains={0: {"pagesize": 5}},
+        expect_args_contains={0: {"pagesize": 5, "recent": True}},  # T6: recent 标志触发排序
         forbid_args_keys={0: ["time_start", "time_end"]},  # "最近N条"是数量限制非时间
         tag="最近N条",
     ),
@@ -84,7 +84,7 @@ EVAL_CASES = [
         id="T07",
         query="查最近 10 条告警",
         expect_tools=["ai_event_list"],
-        expect_args_contains={0: {"pagesize": 10}},
+        expect_args_contains={0: {"pagesize": 10, "recent": True}},  # T6: recent 标志
         forbid_args_keys={0: ["time_start"]},
         tag="最近N条",
     ),
@@ -228,9 +228,9 @@ EVAL_CASES = [
     ),
     EvalCase(
         id="T26",
-        query="给我看最近20条告警",  # 口语"最近N条" → pagesize 限数量，不加时间（few-shot ①）
+        query="给我看最近20条告警",  # 口语"最近N条" → pagesize + recent 标志（few-shot ①）
         expect_tools=["ai_event_list"],
-        expect_args_contains={0: {"pagesize": 20}},
+        expect_args_contains={0: {"pagesize": 20, "recent": True}},  # T6: recent 触发排序
         forbid_args_keys={0: ["time_start", "time_end"]},
         tag="发散-最近N条",
     ),

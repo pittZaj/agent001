@@ -7,8 +7,37 @@
 4. 可观测：详细日志记录分页进度
 """
 import asyncio
+from datetime import datetime
 from typing import Callable, Any
 from loguru import logger
+
+
+def sort_events_by_created_at(events: list, desc: bool = True) -> list:
+    """按 created_at 字段排序（T6：ai_event_list 排序兜底）
+
+    Args:
+        events: 事件列表（每条是 dict，含 created_at 字段）
+        desc: True=降序（最新在前，默认），False=升序
+
+    Returns:
+        排序后的事件列表（原列表不变，返回新列表）
+
+    容错：
+    - 缺 created_at 或解析失败的事件统一视为 datetime.min（排到末尾/降序时）
+    - 保持稳定排序（相同时间的事件保持原顺序）
+    """
+    def _parse_key(e: dict):
+        """解析 created_at 为可排序的 datetime，失败返回 datetime.min"""
+        ca = e.get("created_at")
+        if not ca:
+            return datetime.min
+        try:
+            # 格式：YYYY-MM-DD HH:MM:SS（平台字段映射文档确认）
+            return datetime.strptime(str(ca), "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return datetime.min
+
+    return sorted(events, key=_parse_key, reverse=desc)
 
 
 async def fetch_all_events_concurrent(

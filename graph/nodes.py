@@ -659,27 +659,68 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     # 同步包装异步调用（兼容 有/无 运行中事件循环 两种情况）
     try:
         if task["task"] == "ai_event_list":
-            # 🔧 修复"最近N条"查询返回全量的问题：
-            # 检测到明确的小 pagesize (≤20) 时，不要自动分页拉全量，尊重用户"只看样本"的语义
-            # 只有在"统计全量"场景（无 pagesize 或大值如 10000）才自动分页
+            # T6：ai_event_list 排序兜底（6.2.2）—— 平台不支持排序参数，客户端兜底
+            # 检测 `recent: true` 标志（由 planner 在"最近N条"语义下显式传递）：
+            #   - 命中且 pagesize ≤ 100 → 全量拉取 + 按 created_at 降序 + 截断前 N
+            #   - 命中但 pagesize > 100 → 拒绝并提示（避免无意义全量）
+            #   - 未命中 → 保持原有"小 pagesize 不分页/大 pagesize 统计全量"逻辑
             user_pagesize = args.get("pagesize")
-            should_fetch_all = user_pagesize is None or user_pagesize > 20
+            is_recent = args.pop("recent", False)  # pop 避免传给平台（平台不认此参数）
 
-            async def _invoke_with_paging():
-                first = await registry.invoke("ai_event_list", args, context)
-                if first.get("error"):
-                    return first
-                # 只有在需要统计全量时才自动分页
-                if should_fetch_all:
-                    return await _fetch_all_events_async(registry, args, context, first)
+            if is_recent:
+                # "最近N条"语义：必须排序才能保证返回真正最新的
+                if not user_pagesize or user_pagesize > 100:
+                    # 阈值保护：超 100 条建议用时间筛选
+                    result_data = {
+                        "error": (
+                            '「最近N条」建议 N ≤ 100（当前请求 N={}）。如需更大范围，'
+                            '请改用时间筛选（如"查今天的告警"）以缩小候选集。'
+                        ).format(user_pagesize or "全量")
+                    }
                 else:
-                    logger.info(
-                        f"[Executor] ai_event_list 检测到小 pagesize={user_pagesize}，"
-                        f"不自动拉全量（用户意图：查看样本/最近N条）"
-                    )
-                    return first
+                    async def _invoke_with_recent_sort():
+                        """全量拉取 + 排序 + 截断，保证返回真正最新的 N 条"""
+                        # 全量拉取（利用已有并发翻页基建）
+                        first = await registry.invoke("ai_event_list", args, context)
+                        if first.get("error"):
+                            return first
+                        full = await _fetch_all_events_async(registry, args, context, first)
 
-            result_data = _run_async(_invoke_with_paging())
+                        # 按 created_at 降序（最新在前）
+                        from graph.pagination import sort_events_by_created_at
+                        all_events = full.get("events", [])
+                        sorted_events = sort_events_by_created_at(all_events, desc=True)
+
+                        # 截断前 N 条（真正最新）
+                        result = dict(full)
+                        result["events"] = sorted_events[:user_pagesize]
+                        result["_sorted_and_truncated"] = True
+                        logger.info(
+                            f"[Executor] 「最近 {user_pagesize} 条」已排序：全量 {len(all_events)} 条 "
+                            f"→ 按 created_at 降序 → 截断前 {user_pagesize} 条"
+                        )
+                        return result
+
+                    result_data = _run_async(_invoke_with_recent_sort())
+            else:
+                # 原有逻辑（小 pagesize 不分页 / 大 pagesize 统计全量）
+                should_fetch_all = user_pagesize is None or user_pagesize > 20
+
+                async def _invoke_with_paging():
+                    first = await registry.invoke("ai_event_list", args, context)
+                    if first.get("error"):
+                        return first
+                    # 只有在需要统计全量时才自动分页
+                    if should_fetch_all:
+                        return await _fetch_all_events_async(registry, args, context, first)
+                    else:
+                        logger.info(
+                            f"[Executor] ai_event_list 检测到小 pagesize={user_pagesize}，"
+                            f"不自动拉全量（用户意图：查看样本）"
+                        )
+                        return first
+
+                result_data = _run_async(_invoke_with_paging())
         else:
             result_data = _run_async(registry.invoke(task["task"], args, context))
 
