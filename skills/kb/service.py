@@ -149,6 +149,7 @@ class KnowledgeBaseService:
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
         custom_separator: str | None = None,
+        qa_mode: bool = False,  # 新增：是否启用问答对模式
     ) -> dict[str, Any]:
         """上传文档：解析 → 分块 → 向量化 → 入库
 
@@ -159,9 +160,10 @@ class KnowledgeBaseService:
             chunk_size: 固定大小策略的分块字符数，None 则用配置默认
             chunk_overlap: 固定大小策略的重叠字符数，None 则用配置默认
             custom_separator: by_separator 策略的自定义分隔符（如 "****"），None 则不生效
+            qa_mode: 是否启用问答对模式（提升检索精度）
 
         Returns:
-            {"doc_id": str, "chunks_count": int}
+            {"doc_id": str, "chunks_count": int, "qa_mode": bool}
         """
         strategy = chunk_strategy or self.config.chunk_strategy
         size = chunk_size if chunk_size is not None else self.config.chunk_size
@@ -199,30 +201,78 @@ class KnowledgeBaseService:
         if not texts:
             raise ValueError(f"分块后无有效内容: {file_path}")
 
-        # 3. 向量化
-        vectors = self._embed(texts)
+        # 3. Q&A 模式：生成问答对（可选）
+        if qa_mode:
+            logger.info(f"[KB] 启用 Q&A 模式，对 {len(texts)} 个块生成问答对")
+            from .qa_generator import generate_qa_batch
+            import asyncio
 
-        # 4. 归档源文件 + 入库
-        doc_id = str(uuid.uuid4())
-        filename = metadata.get("filename") or os.path.basename(file_path)
-        source_path, file_size = archive_source(
-            self.config.source_dir, doc_id, file_path, filename
-        )
-        points = [
-            PointStruct(
-                id=str(uuid.uuid4()),
-                vector=vec,
-                payload={
-                    "text": text,
-                    "doc_id": doc_id,
-                    "chunk_index": i,
-                    "title": metadata.get("title", ""),
-                    "category": metadata.get("category", "其他"),
-                    "filename": filename,
-                },
+            # 批量生成问答对
+            qa_pairs = asyncio.run(generate_qa_batch(texts, max_concurrency=3))
+
+            if not qa_pairs:
+                logger.warning("[KB] Q&A 生成失败，降级为普通分块模式")
+                qa_mode = False  # 标记降级
+            else:
+                logger.info(f"[KB] 成功生成 {len(qa_pairs)} 个问答对")
+
+                # 准备 Q&A 数据：用"问题"作为向量化文本
+                qa_texts = [qa["question"] for qa in qa_pairs]
+                vectors = self._embed(qa_texts)
+
+                # 构建 points（Q&A 模式）
+                doc_id = str(uuid.uuid4())
+                filename = metadata.get("filename") or os.path.basename(file_path)
+                source_path, file_size = archive_source(
+                    self.config.source_dir, doc_id, file_path, filename
+                )
+
+                points = [
+                    PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=vec,
+                        payload={
+                            "text": qa["question"],  # 检索匹配用问题
+                            "answer": qa["answer"],  # 返回给用户的答案
+                            "source_chunk": texts[qa["chunk_idx"]][:200],  # 溯源片段
+                            "doc_id": doc_id,
+                            "chunk_index": i,
+                            "title": metadata.get("title", ""),
+                            "category": metadata.get("category", "其他"),
+                            "filename": filename,
+                            "qa_mode": True,  # 标记为问答对模式
+                        },
+                    )
+                    for i, (qa, vec) in enumerate(zip(qa_pairs, vectors))
+                ]
+
+        # 普通模式：直接向量化分块
+        if not qa_mode:
+            # 3. 向量化
+            vectors = self._embed(texts)
+
+            # 4. 归档源文件 + 入库
+            doc_id = str(uuid.uuid4())
+            filename = metadata.get("filename") or os.path.basename(file_path)
+            source_path, file_size = archive_source(
+                self.config.source_dir, doc_id, file_path, filename
             )
-            for i, (text, vec) in enumerate(zip(texts, vectors))
-        ]
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vec,
+                    payload={
+                        "text": text,
+                        "doc_id": doc_id,
+                        "chunk_index": i,
+                        "title": metadata.get("title", ""),
+                        "category": metadata.get("category", "其他"),
+                        "filename": filename,
+                        "qa_mode": False,  # 标记为普通模式
+                    },
+                )
+                for i, (text, vec) in enumerate(zip(texts, vectors))
+            ]
         try:
             self.client.upsert(collection_name=self.collection_name, points=points)
             store = get_mysql_store()
@@ -257,7 +307,7 @@ class KnowledgeBaseService:
         elif strategy == ChunkStrategy.BY_SEPARATOR:
             extra_info += f", separator={repr(custom_separator)}"
         logger.info(
-            f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, title={metadata.get('title')}"
+            f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, qa_mode={qa_mode}, title={metadata.get('title')}"
         )
         return {
             "doc_id": doc_id,
@@ -265,6 +315,7 @@ class KnowledgeBaseService:
             "has_source": True,
             "filename": filename,
             "file_size": file_size,
+            "qa_mode": qa_mode,  # 新增：标识是否使用问答对模式
         }
 
 
@@ -333,12 +384,15 @@ class KnowledgeBaseService:
 
         return [
             {
-                "text": r.payload["text"],
+                "text": r.payload.get("answer") if r.payload.get("qa_mode") else r.payload["text"],  # Q&A模式返回答案
                 "score": round(float(score), 4),
                 "doc_id": r.payload["doc_id"],
                 "chunk_index": r.payload["chunk_index"],
                 "title": r.payload.get("title", ""),
                 "category": r.payload.get("category", ""),
+                "qa_mode": r.payload.get("qa_mode", False),  # 标识是否为问答对
+                "question": r.payload.get("text") if r.payload.get("qa_mode") else None,  # Q&A模式保留问题
+                "source_chunk": r.payload.get("source_chunk", ""),  # 溯源片段
             }
             for r, score in reranked
         ]
