@@ -115,11 +115,20 @@ def session_turn_info(thread_id: str) -> tuple[int, bool]:
 
     从 checkpointer 读该 thread_id 的已存 messages 计 AI 回复条数。
     读不到（新会话/未初始化）按 0 轮处理。
+
+    🔧 优化：直接访问 checkpointer 而非通过 graph，避免触发主图初始化（MCP连接）。
+    新会话（未初始化）快速返回 0，避免不必要的 checkpointer 查询。
     """
     if not thread_id:
         return 0, False
+
+    # 快速路径：如果主图未初始化，说明还没有任何会话历史，直接返回 0
+    # 避免为了显示"新会话"这一个 banner 就触发整个主图 + MCP Watcher 初始化
+    if not _MAIN_GRAPH_INITIALIZED:
+        return 0, False
+
     try:
-        from graph.memory import get_checkpointer, count_turns, SOFT_TURN_LIMIT
+        from graph.memory import count_turns, SOFT_TURN_LIMIT
         graph = _get_main_graph()
         cfg = {"configurable": {"thread_id": thread_id}}
         snap = graph.get_state(cfg)
@@ -382,9 +391,7 @@ def list_user_sessions(user_id: str = "default") -> list[dict]:
         - turn_count: 对话轮数
     """
     try:
-        # 确保主图已初始化（这会初始化 Redis checkpointer）
-        _get_main_graph()
-
+        # 🔧 优化：session_manager 直接用 checkpointer，无需初始化主图和 MCP
         from graph.session_manager import get_session_manager
 
         manager = get_session_manager()
@@ -416,9 +423,7 @@ def delete_user_session(thread_id: str) -> tuple[bool, str]:
         (是否成功, 提示消息)
     """
     try:
-        # 确保主图已初始化
-        _get_main_graph()
-
+        # 🔧 优化：session_manager 直接用 checkpointer，无需初始化主图和 MCP
         from graph.session_manager import get_session_manager
 
         manager = get_session_manager()
@@ -448,9 +453,7 @@ def rename_user_session(thread_id: str, new_title: str) -> tuple[bool, str]:
         return False, "❌ 标题不能为空"
 
     try:
-        # 确保主图已初始化
-        _get_main_graph()
-
+        # 🔧 优化：session_manager 直接用 checkpointer，无需初始化主图和 MCP
         from graph.session_manager import get_session_manager
 
         manager = get_session_manager()
@@ -476,9 +479,7 @@ def get_session_title(thread_id: str) -> str:
         会话标题
     """
     try:
-        # 确保主图已初始化
-        _get_main_graph()
-
+        # 🔧 优化：session_manager 直接用 checkpointer，无需初始化主图和 MCP
         from graph.session_manager import get_session_manager
 
         manager = get_session_manager()
@@ -503,9 +504,7 @@ def load_session_history(thread_id: str) -> list[dict]:
         [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
     """
     try:
-        # 确保主图已初始化
-        _get_main_graph()
-
+        # 🔧 优化：直接用 checkpointer，无需初始化主图和 MCP
         from graph.memory import get_checkpointer
         from langchain_core.messages import HumanMessage, AIMessage
 

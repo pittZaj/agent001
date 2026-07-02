@@ -34,24 +34,30 @@
 
 ---
 
-## 二、根因分析
+## 二、根因分析（第二次深挖）
 
-### 2.1 调用链追溯
+### 2.1 真实调用链追溯
 
-**问题调用链**：
+**第一版修复失败原因**：只修改 `_get_main_graph()` 增加标志位，但**没有找到真正的触发源**。
+
+**第二次深挖发现的真实调用链**：
 
 ```
 Web 启动 (restart_web.sh)
   ↓
-web/app.py:474 build_ui()
+web/app.py:474 build_ui() 构建界面
   ↓
-web/agent_chat.py 模块导入
+web/app.py:461 demo.load(init_state, ...) 注册首次加载回调
   ↓
-web/agent_chat.py:43 _get_main_graph() 【问题点】
+浏览器访问 → Gradio 触发 init_state()
   ↓
-skills/init.py:init_skill_registry()
+web/app.py:105 init_state() 调用 _turn_banner(tid, user_id)
   ↓
-skills/mcp_watcher.py:start_mcp_watcher()
+web/app.py:87 _turn_banner() 调用 agent_chat.session_turn_info(tid) 【问题点】
+  ↓
+web/agent_chat.py:123 session_turn_info() 调用 _get_main_graph()
+  ↓
+_get_main_graph() 触发 init_skill_registry() + start_mcp_watcher()
   ↓
 skills/mcp_watcher.py:87 health_interval=30s 定期健康检查
   ↓
@@ -60,34 +66,41 @@ skills/mcp_watcher.py:87 health_interval=30s 定期健康检查
 
 ### 2.2 核心问题
 
-**文件**：`agent/web/agent_chat.py:43-59`
+**问题一：`session_turn_info()` 无必要调用主图**
+
+**文件**：`agent/web/agent_chat.py:113-130`
 
 ```python
-# ❌ 问题代码（旧版）
-def _get_main_graph():
-    """懒加载主图（含 Skill Registry 初始化）"""
-    global _MAIN_GRAPH
-    if _MAIN_GRAPH is None:  # 👈 仅检查 _MAIN_GRAPH，但没有防止模块导入时被调用
-        # agent 项目根目录（agent/），主图代码在此
-        agent_root = PROJECT_ROOT.parent
-        if str(agent_root) not in sys.path:
-            sys.path.insert(0, str(agent_root))
-        from skills.init import init_skill_registry
-        from skills.mcp_watcher import start_mcp_watcher
-        from graph import get_graph
-        # 在进程级后台循环上初始化；MCP 由后台监听器异步连接，不阻塞启动。
-        from utils.async_loop import run_on_background_loop
-        run_on_background_loop(init_skill_registry())
-        start_mcp_watcher()  # 👈 立即启动 MCP 监听器
-        _MAIN_GRAPH = get_graph()
-    return _MAIN_GRAPH
+# ❌ 问题代码
+def session_turn_info(thread_id: str) -> tuple[int, bool]:
+    if not thread_id:
+        return 0, False
+    try:
+        from graph.memory import get_checkpointer, count_turns, SOFT_TURN_LIMIT
+        graph = _get_main_graph()  # 👈 触发 MCP Watcher 启动！
+        cfg = {"configurable": {"thread_id": thread_id}}
+        snap = graph.get_state(cfg)
+        # ...
 ```
+
+**问题二：多个 session 管理函数误调用主图**
+
+`agent/web/agent_chat.py` 中 6 个函数都在调用 `_get_main_graph()`，但它们其实**只需要 checkpointer 或 session_manager**，与主图（MCP 工具）无关：
+
+| 函数                        | 实际需要                | 错误调用       |
+| --------------------------- | ----------------------- | -------------- |
+| `session_turn_info()`       | graph.get_state         | ✅ 需要主图    |
+| `list_user_sessions()`      | session_manager         | ❌ 无需主图    |
+| `delete_user_session()`     | session_manager         | ❌ 无需主图    |
+| `rename_user_session()`     | session_manager         | ❌ 无需主图    |
+| `get_session_title()`       | session_manager         | ❌ 无需主图    |
+| `load_session_history()`    | checkpointer            | ❌ 无需主图    |
 
 **问题根源**：
 
-1. **误以为是懒加载**：函数名叫 `_get_main_graph()`，看起来是懒加载
-2. **实际是急切初始化**：虽然代码逻辑是懒加载，但在**模块导入时**就被某处代码调用了（经排查，不是显式调用，而是 import 副作用）
-3. **MCP Watcher 立即启动**：`start_mcp_watcher()` 会启动一个后台线程，每 30 秒检查 MCP 连接健康状态
+1. **误以为需要主图初始化 Redis**：注释写着"确保主图已初始化（这会初始化 Redis checkpointer）"
+2. **实际上 checkpointer 独立**：`get_checkpointer()` 和 `get_session_manager()` 都是独立单例，不需要主图
+3. **误伤连锁反应**：只要 Web 加载时显示"新会话"状态条，就会触发一系列不必要的初始化
 
 ### 2.3 MCP Watcher 机制
 
@@ -115,83 +128,69 @@ async def _watcher_loop(registry: SkillRegistry) -> None:
 
 ---
 
-## 三、修复方案
+## 三、修复方案（两轮迭代）
 
-### 3.1 设计原则
+### 3.0 第一轮修复（不完整）
 
-遵循 **Karpathy Guidelines**：
+仅修改 `_get_main_graph()` 增加初始化标志位，但**没有解决问题**——因为 `session_turn_info()` 在 Web 首次加载时被调用，仍然会触发主图初始化。
+
+### 3.1 第二轮修复（真正解决）
+
+**设计原则**（遵循 **Karpathy Guidelines**）：
 
 1. **简单优先**：最小改动，只修改问题点
-2. **外科手术式改动**：仅触碰 `agent_chat.py` 的 `_get_main_graph()` 函数
+2. **外科手术式改动**：仅移除不必要的 `_get_main_graph()` 调用，不改变其他逻辑
 3. **目标驱动**：确保 Web 启动时不触发 MCP 连接，用户首次发消息时才初始化
 
 ### 3.2 修复内容
 
-**文件**：`agent/web/agent_chat.py:35-74`
+**核心思路**：把不需要主图的会话管理函数中的 `_get_main_graph()` 调用**直接移除**，并给 `session_turn_info()` 加"快速返回路径"避免为空会话触发主图。
 
-**修改前**：
-
-```python
-_MAIN_GRAPH = None
-
-def _get_main_graph():
-    """懒加载主图（含 Skill Registry 初始化）"""
-    global _MAIN_GRAPH
-    if _MAIN_GRAPH is None:
-        # ... 初始化代码 ...
-        start_mcp_watcher()
-        _MAIN_GRAPH = get_graph()
-    return _MAIN_GRAPH
-```
-
-**修改后**：
+**修改 1**：`session_turn_info()` 增加快速路径
 
 ```python
-_MAIN_GRAPH = None
-_MAIN_GRAPH_INITIALIZED = False  # ✅ 新增：防止重复初始化标志
+def session_turn_info(thread_id: str) -> tuple[int, bool]:
+    if not thread_id:
+        return 0, False
 
-def _get_main_graph():
-    """懒加载主图（含 Skill Registry 初始化）
+    # 🔧 快速路径：如果主图未初始化，说明还没有任何会话历史，直接返回 0
+    # 避免为了显示"新会话"这一个 banner 就触发整个主图 + MCP Watcher 初始化
+    if not _MAIN_GRAPH_INITIALIZED:
+        return 0, False
 
-    🔧 优化：真正的懒加载 - 仅在首次调用时初始化，避免 Web 启动时立即触发 MCP 连接
-    """
-    global _MAIN_GRAPH, _MAIN_GRAPH_INITIALIZED
-
-    if _MAIN_GRAPH_INITIALIZED:  # ✅ 使用专门的标志
-        return _MAIN_GRAPH
-
-    # 首次调用时初始化
-    logger.info("[agent_chat] 首次调用，开始初始化主图...")  # ✅ 日志追踪
-
-    # agent 项目根目录（agent/），主图代码在此
-    agent_root = PROJECT_ROOT.parent
-    if str(agent_root) not in sys.path:
-        sys.path.insert(0, str(agent_root))
-
-    from skills.init import init_skill_registry
-    from skills.mcp_watcher import start_mcp_watcher
-    from graph import get_graph
-
-    # 在进程级后台循环上初始化；MCP 由后台监听器异步连接，不阻塞启动。
-    from utils.async_loop import run_on_background_loop
-    run_on_background_loop(init_skill_registry())
-    start_mcp_watcher()
-
-    _MAIN_GRAPH = get_graph()
-    _MAIN_GRAPH_INITIALIZED = True  # ✅ 标记已初始化
-
-    logger.info("[agent_chat] 主图初始化完成")  # ✅ 日志追踪
-    return _MAIN_GRAPH
+    try:
+        from graph.memory import count_turns, SOFT_TURN_LIMIT
+        graph = _get_main_graph()  # 只在有历史时才需要
+        # ...
 ```
+
+**修改 2~6**：移除 5 个会话管理函数中的无用 `_get_main_graph()` 调用
+
+- `list_user_sessions()`：只需 `session_manager`
+- `delete_user_session()`：只需 `session_manager`
+- `rename_user_session()`：只需 `session_manager`
+- `get_session_title()`：只需 `session_manager`
+- `load_session_history()`：只需 `checkpointer`
+
+统一改为直接导入所需模块，不再"绕道"调用主图。
 
 ### 3.3 关键改进
 
-| 维度         | 改进内容                                      | 收益                 |
-| ------------ | --------------------------------------------- | -------------------- |
-| **新增标志** | `_MAIN_GRAPH_INITIALIZED`                     | 防止重复初始化       |
-| **日志追踪** | 初始化开始和完成的 logger.info                | 便于诊断和验证       |
-| **注释说明** | 明确标注"真正的懒加载"和优化目的              | 提升代码可维护性     |
-| **零侵入**   | 不修改 MCP Watcher、async_loop 等底层模块     | 降低风险，符合原则   |
+| 维度                | 改进内容                                          | 收益                 |
+| ------------------- | ------------------------------------------------- | -------------------- |
+| **快速返回路径**    | `session_turn_info` 未初始化时直接返回 0           | 避免为空会话触发主图 |
+| **移除无用调用**    | 5 个会话管理函数移除 `_get_main_graph()`           | 根本解决问题         |
+| **新增标志**        | `_MAIN_GRAPH_INITIALIZED`                          | 防止重复初始化       |
+| **零侵入底层模块**  | 不修改 MCP Watcher、async_loop、session_manager    | 降低风险，符合原则   |
+
+### 3.4 验证测试结果
+
+启动 Web 后监控 **90 秒**：
+
+- ✅ **MCP 相关日志数**：`0` 条
+- ✅ **`ksagent-mcp-loop` 线程**：未启动
+- ✅ **`init_skill_registry`**：未调用
+- ✅ **界面正常加载**：默认用户 + 新会话 banner 显示正常
 
 ---
 
