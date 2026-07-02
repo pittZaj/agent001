@@ -38,24 +38,40 @@ _RUN_CACHE: dict[str, Any] = {}
 # 用户在 Tab6 默认只需选它，背后走升级后的主图。
 MAIN_AGENT_NAME = "主智能体(增强)"
 _MAIN_GRAPH = None
+_MAIN_GRAPH_INITIALIZED = False  # 新增：防止重复初始化标志
 
 
 def _get_main_graph():
-    """懒加载主图（含 Skill Registry 初始化）"""
-    global _MAIN_GRAPH
-    if _MAIN_GRAPH is None:
-        # agent 项目根目录（agent/），主图代码在此
-        agent_root = PROJECT_ROOT.parent
-        if str(agent_root) not in sys.path:
-            sys.path.insert(0, str(agent_root))
-        from skills.init import init_skill_registry
-        from skills.mcp_watcher import start_mcp_watcher
-        from graph import get_graph
-        # 在进程级后台循环上初始化；MCP 由后台监听器异步连接，不阻塞启动。
-        from utils.async_loop import run_on_background_loop
-        run_on_background_loop(init_skill_registry())
-        start_mcp_watcher()
-        _MAIN_GRAPH = get_graph()
+    """懒加载主图（含 Skill Registry 初始化）
+
+    🔧 优化：真正的懒加载 - 仅在首次调用时初始化，避免 Web 启动时立即触发 MCP 连接
+    """
+    global _MAIN_GRAPH, _MAIN_GRAPH_INITIALIZED
+
+    if _MAIN_GRAPH_INITIALIZED:
+        return _MAIN_GRAPH
+
+    # 首次调用时初始化
+    logger.info("[agent_chat] 首次调用，开始初始化主图...")
+
+    # agent 项目根目录（agent/），主图代码在此
+    agent_root = PROJECT_ROOT.parent
+    if str(agent_root) not in sys.path:
+        sys.path.insert(0, str(agent_root))
+
+    from skills.init import init_skill_registry
+    from skills.mcp_watcher import start_mcp_watcher
+    from graph import get_graph
+
+    # 在进程级后台循环上初始化；MCP 由后台监听器异步连接，不阻塞启动。
+    from utils.async_loop import run_on_background_loop
+    run_on_background_loop(init_skill_registry())
+    start_mcp_watcher()
+
+    _MAIN_GRAPH = get_graph()
+    _MAIN_GRAPH_INITIALIZED = True
+
+    logger.info("[agent_chat] 主图初始化完成")
     return _MAIN_GRAPH
 
 
