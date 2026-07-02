@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 # 离线加载本地模型（服务器无法访问 huggingface.co）
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -150,6 +151,7 @@ class KnowledgeBaseService:
         chunk_overlap: int | None = None,
         custom_separator: str | None = None,
         qa_mode: bool = False,  # 新增：是否启用问答对模式
+        is_scanned: bool = False,  # 新增：是否为影印版文件
     ) -> dict[str, Any]:
         """上传文档：解析 → 分块 → 向量化 → 入库
 
@@ -161,13 +163,44 @@ class KnowledgeBaseService:
             chunk_overlap: 固定大小策略的重叠字符数，None 则用配置默认
             custom_separator: by_separator 策略的自定义分隔符（如 "****"），None 则不生效
             qa_mode: 是否启用问答对模式（提升检索精度）
+            is_scanned: 是否为影印版文件（启用 OCR 识别）
 
         Returns:
-            {"doc_id": str, "chunks_count": int, "qa_mode": bool}
+            {"doc_id": str, "chunks_count": int, "qa_mode": bool, "is_scanned": bool}
         """
         strategy = chunk_strategy or self.config.chunk_strategy
         size = chunk_size if chunk_size is not None else self.config.chunk_size
         overlap = chunk_overlap if chunk_overlap is not None else self.config.chunk_overlap
+
+        # 0. 影印版处理：先 OCR 转 Markdown，再走普通流程
+        original_file_path = file_path
+        temp_md_path = None
+        if is_scanned and file_path.lower().endswith('.pdf'):
+            from .ocr_processor import process_scanned_pdf
+            import asyncio
+
+            logger.info(f"[KB] 检测到影印版 PDF，启动 OCR 处理: {file_path}")
+
+            try:
+                # OCR 处理
+                markdown_text = asyncio.run(process_scanned_pdf(file_path))
+
+                # 保存临时 Markdown 文件
+                temp_md_path = Path(file_path).with_suffix('.ocr.md')
+                temp_md_path.write_text(markdown_text, encoding='utf-8')
+
+                # 后续用 Markdown 文件路径替换原 PDF 路径
+                file_path = str(temp_md_path)
+                metadata["original_type"] = "scanned_pdf"
+                metadata["ocr_processed"] = True
+
+                logger.info(f"[KB] OCR 处理完成，生成临时文件: {temp_md_path}")
+
+            except Exception as e:
+                logger.error(f"[KB] OCR 处理失败: {e}")
+                if temp_md_path and temp_md_path.exists():
+                    temp_md_path.unlink()
+                raise ValueError(f"影印版 PDF OCR 识别失败: {e}") from e
 
         # 1. 解析（PDF/DOCX/TXT/MD 走轻量库，不依赖 NLTK）
         full_text = load_document_text(file_path)
@@ -301,13 +334,22 @@ class KnowledgeBaseService:
             remove_source(source_path)
             remove_source_by_doc_id(self.config.source_dir, doc_id)
             raise
+        finally:
+            # 清理临时 OCR 文件
+            if temp_md_path and temp_md_path.exists():
+                try:
+                    temp_md_path.unlink()
+                    logger.info(f"[KB] 清理临时 OCR 文件: {temp_md_path}")
+                except Exception as e:
+                    logger.warning(f"[KB] 清理临时文件失败: {e}")
+
         extra_info = f"strategy={strategy.value}"
         if strategy == ChunkStrategy.FIXED_SIZE:
             extra_info += f", size={size}, overlap={overlap}"
         elif strategy == ChunkStrategy.BY_SEPARATOR:
             extra_info += f", separator={repr(custom_separator)}"
         logger.info(
-            f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, qa_mode={qa_mode}, title={metadata.get('title')}"
+            f"上传文档 doc_id={doc_id}, chunks={len(points)}, {extra_info}, qa_mode={qa_mode}, is_scanned={is_scanned}, title={metadata.get('title')}"
         )
         return {
             "doc_id": doc_id,
@@ -316,6 +358,7 @@ class KnowledgeBaseService:
             "filename": filename,
             "file_size": file_size,
             "qa_mode": qa_mode,  # 新增：标识是否使用问答对模式
+            "is_scanned": is_scanned,  # 新增：标识是否为影印版
         }
 
 

@@ -41,9 +41,14 @@ def _get_kb():
     return _kb
 
 
-def kb_upload(file, title, category, qa_mode, chunk_strategy, chunk_size, chunk_overlap, custom_sep):
+def kb_upload(file, title, category, is_scanned, qa_mode, chunk_strategy, chunk_size, chunk_overlap, custom_sep):
     if file is None:
         return "❌ 请先选择文件"
+
+    # 影印版仅支持 PDF
+    if is_scanned and not file.name.lower().endswith('.pdf'):
+        return "❌ 影印版模式仅支持 PDF 文件"
+
     try:
         from skills.kb import ChunkStrategy
         kb = _get_kb()
@@ -60,7 +65,8 @@ def kb_upload(file, title, category, qa_mode, chunk_strategy, chunk_size, chunk_
                 return "❌ 选择'按特殊标记符分割'时，必须输入分隔符（如 ****）"
             kwargs["custom_separator"] = sep
 
-        # 添加 qa_mode 参数
+        # 添加 is_scanned 和 qa_mode 参数
+        kwargs["is_scanned"] = is_scanned
         kwargs["qa_mode"] = qa_mode
 
         r = kb.upload_document(
@@ -79,8 +85,15 @@ def kb_upload(file, title, category, qa_mode, chunk_strategy, chunk_size, chunk_
         elif strategy == ChunkStrategy.BY_SEPARATOR:
             extra = f"\n分隔符: {repr(sep)}"
 
-        mode_desc = f"\n模式: {'问答对(Q&A)' if r.get('qa_mode') else '普通分块'}"
-        return f"✅ 上传成功\n文档ID: {r['doc_id']}\n分块数: {r['chunks_count']}\n分块策略: {chunk_strategy}{extra}{mode_desc}"
+        # 组合模式描述
+        mode_desc = []
+        if r.get("is_scanned"):
+            mode_desc.append("影印版OCR")
+        if r.get("qa_mode"):
+            mode_desc.append("问答对")
+        mode_str = " + ".join(mode_desc) if mode_desc else "普通分块"
+
+        return f"✅ 上传成功\n文档ID: {r['doc_id']}\n分块数: {r['chunks_count']}\n分块策略: {chunk_strategy}{extra}\n模式: {mode_str}"
     except Exception as e:
         return f"❌ 上传失败: {e}"
 
@@ -231,6 +244,13 @@ def build_kb_tab():
                     info="自定义分类名，检索时可按此过滤",
                 )
 
+                # 新增：影印版标记
+                is_scanned_in = gr.Checkbox(
+                    label="📄 这是影印版/扫描件文件",
+                    value=False,
+                    info="勾选后将使用 OCR 识别文字（仅支持 PDF，处理时间约 30秒/页）"
+                )
+
                 # 新增：Q&A 模式复选框
                 qa_mode_in = gr.Checkbox(
                     label="🤖 启用问答对（Q&A）知识库模式",
@@ -320,7 +340,7 @@ def build_kb_tab():
         # ---------------- 事件绑定 ----------------
         upload_btn.click(
             kb_upload,
-            [file_in, title_in, cat_in, qa_mode_in, chunk_strategy_in, chunk_size_in, chunk_overlap_in, custom_sep_in],
+            [file_in, title_in, cat_in, is_scanned_in, qa_mode_in, chunk_strategy_in, chunk_size_in, chunk_overlap_in, custom_sep_in],
             upload_out,
         )
         del_btn.click(kb_delete, del_in, del_out)
