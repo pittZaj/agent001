@@ -294,8 +294,11 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
 
     client = _thread_local.client
 
-    # 🔧 优化 4.1：添加日志追踪连接复用情况
-    logger.debug(f"[MCP] get_mcp_client 调用 (thread={threading.current_thread().name}, "
+    # 🔧 优化 4.1：追踪连接复用情况。
+    #   注意：本行会被 MCP Watcher 心跳每 health_interval 秒调用一次（连接正常时纯复用），
+    #   用 trace 级别避免在 INFO 日志里刷屏（第三次修复 2026-07-03）。需要排查复用时
+    #   用 LOGURU_LEVEL=TRACE 启用。
+    logger.trace(f"[MCP] get_mcp_client 调用 (thread={threading.current_thread().name}, "
                 f"cached={client is not None}, force_reconnect={force_reconnect})")
 
     # 检查是否需要重连
@@ -308,7 +311,7 @@ async def get_mcp_client(force_reconnect: bool = False) -> MCPClient:
 
     # 如果不需要重连且已存在，直接返回
     if client is not None and not need_reconnect:
-        logger.debug(f"[MCP] 复用已有连接 (thread={threading.current_thread().name})")  # 🔧 优化 4.1
+        logger.trace(f"[MCP] 复用已有连接 (thread={threading.current_thread().name})")  # 🔧 优化 4.1（trace：心跳复用不刷屏）
         return client
 
     # 需要重连时先关闭旧连接
