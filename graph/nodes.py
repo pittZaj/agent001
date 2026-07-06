@@ -148,23 +148,6 @@ def _needs_event_catalog(user_message: str) -> bool:
         return False
     return True
 
-
-def _planner_catalog_block(user_message: str) -> str:
-    if not _needs_event_catalog(user_message):
-        return ""
-    names = _supported_catalog_inline()
-    return (
-        "# AI 告警类型（event_type 必取自平台字典，禁止编造）\n"
-        f"支持类型：{names}\n"
-        "规则：\n"
-        "- 用户明确提到某类算法（如未戴安全帽/抽烟/使用手机）→ 带 event_type=ET编码（仅 ET03007 这种，禁止中文或「名称(编码)」混写）\n"
-        "- 用户说「统计…告警/事件」且指明类型 → aggregate_alarms（event_type=ET编码，group_by=camera，补全今天 time_start/time_end）\n"
-        "- 用户只说「AI告警/告警事件/统计告警」未指具体类型 → 禁止传 event_type\n"
-        "- 按摄像机/地点统计 → aggregate_alarms（group_by=event_name，camera_name 从原话提取）\n"
-        "- 平台不支持的类型 → direct_response；支持但暂无数据仍须查询后据实回复"
-    )
-
-
 # 口语里常见的算法别名（补充 event_types 字典里的正式名称）
 _EVENT_TYPE_HINTS = (
     "安全帽", "抽烟", "口罩", "护目镜", "安全带", "工作服", "明火", "烟雾", "灭火器",
