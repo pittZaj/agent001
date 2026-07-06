@@ -212,11 +212,23 @@ def build_planner_system_prompt(
     Returns:
         完整 system prompt（稳定前缀 + 动态后缀）
     """
-    # 关键：动态后缀放在最后，确保稳定前缀完全一致（利于 vLLM prefix cache）
+    # 构建稳定前缀（L1+L2）和动态后缀（L3）
     stable = build_stable_prefix(tools_text, catalog_text, catalog_names)
     dynamic = build_dynamic_suffix(now)
 
-    # 动态段（时间规则）放在最后
-    return f"""{dynamic}
+    # ⚠️ 关键优化（H1）：稳定前缀必须前置，动态后缀放在最后，
+    # 确保每次请求的前缀完全一致，最大化 vLLM prefix cache 命中率。
+    # 可通过 config.llm.prefix_cache_friendly 控制（默认 true）
+    from utils import CONFIG
+    prefix_cache_friendly = CONFIG.get("llm", {}).get("prefix_cache_friendly", True)
+
+    if prefix_cache_friendly:
+        # 稳定前缀前置（H1 修复后的正确顺序）
+        return f"""{stable}
+
+{dynamic}"""
+    else:
+        # 旧顺序（仅用于对照验证，默认不启用）
+        return f"""{dynamic}
 
 {stable}"""
