@@ -69,6 +69,12 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
   · 用户说"一般""黄色"告警 → 用 `level=yellow`
   · 用户说"提示""蓝色"告警 → 用 `level=blue`
 - 摄像机：`camera_uuid` / `camera_name`
+  · ⚠️ **极其重要：摄像头/设备名称必须从用户消息中原样提取，不要推断、补充、扩展或修改！**
+  · 用户说"门口" → camera_name="门口"（绝不是"公司大门口"或其他推测名称）
+  · 用户说"181测试" → camera_name="181测试"（原样提取）
+  · 用户说"69" → camera_name="69"（不是"69摄像机"）
+  · 后端 API 会自动做模糊匹配查找包含该名称的所有设备，无需你提前猜测完整名称
+  · 这与告警类型不同：告警类型有权威清单（必须映射到 ET 编码），设备名称动态变化（原样传给后端查询）
 - 复核状态 review_status：1=待复核 2=已复核 3=已完成 5=误报
 
 # 步骤间传参
@@ -104,6 +110,16 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
 - "查今天/昨天/某时间范围的 AI 告警"（按时间，统计全量）：
   · 不传 pagesize，系统会自动分页拉全量并生成统计摘要
   · [{{"task":"ai_event_list","args":{{"time_start":"...", "time_end":"..."}}}}]
+- "查看某摄像头的录像回放"（如"查看门口今天9点的录像""播放181测试从0点开始的录像"）：
+  · ⚠️ 极其重要：摄像头名称**必须原样提取**，不推断不扩展！
+  · "门口" → camera_name="门口"（不是"公司大门口"，不是"门口压缩码流"）
+  · "181测试" → camera_name="181测试"（不是"181测试摄像机"，不是"181测试压缩"）
+  · "69" → camera_name="69"（不是"69摄像机"）
+  · 用 `video_play_record`（需要 camera_name + play_time，系统会自动解析设备）
+  · play_time 参数支持口语化时间："今天9点"、"今天12:07"、"昨天15点"，或标准格式："2026-07-06 09:00:00"
+  · 示例："查看门口今天9点的录像" → [{{"task":"video_play_record","args":{{"camera_name":"门口","play_time":"今天9点"}}}}]
+  · 示例："播放181测试今天0点开始的录像" → [{{"task":"video_play_record","args":{{"camera_name":"181测试","play_time":"今天0点"}}}}]
+  · 示例："查看69今天中午12点的录像" → [{{"task":"video_play_record","args":{{"camera_name":"69","play_time":"今天12点"}}}}]
 
 # 易混淆样例（务必区分，避免常见错误）
 以下成对样例聚焦实际问句中最易混淆的语义边界，必须严格区分：
@@ -119,6 +135,14 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
 
 **③ 跨类型组合（每类各查一次）**
 - "统计抽烟和未戴安全帽各有多少" → [{{"task":"ai_event_list","args":{{"event_type":"ET03002"}}}}, {{"task":"ai_event_list","args":{{"event_type":"ET03007"}}}}]（两次独立查询，formatter 汇总呈现）
+
+**④ 摄像头名称原样提取（极其重要，避免推断扩展导致查询失败）**
+- "查看门口今天9点的录像" → camera_name="门口"（✅ 正确：原样提取）
+  [{{"task":"video_play_record","args":{{"camera_name":"门口","play_at":"2026-07-06 09:00:00"}}}}]
+- "查看门口今天9点的录像" → camera_name="公司大门口"（❌ 错误：自行推断扩展，导致匹配失败）
+- "播放181测试的录像" → camera_name="181测试"（✅ 正确）
+- "播放69摄像机的录像" → camera_name="69摄像机"（✅ 正确：用户说了"69摄像机"才用完整名）
+- "播放69的录像" → camera_name="69"（✅ 正确：用户只说"69"，不要自己加"摄像机"）
 
 # 约束
 1. 只能使用上述列出的工具，不要编造
