@@ -1,0 +1,135 @@
+2026-07-06 18:02:25.846 | INFO     | utils:load_config:19 - 配置已加载: /mnt/data3/clip/LangGraph/agent/config.yaml
+2026-07-06 18:02:25.850 | INFO     | __main__:main:286 - ============================================================
+2026-07-06 18:02:25.850 | INFO     | __main__:main:287 - 轻量回归评测 - Planner 层
+2026-07-06 18:02:25.850 | INFO     | __main__:main:288 - ============================================================
+2026-07-06 18:02:25.850 | INFO     | __main__:main:294 - LLM 服务: http://127.0.0.1:8004/v1
+2026-07-06 18:02:25.850 | INFO     | __main__:main:302 - 加载 26 条用例
+2026-07-06 18:02:25.850 | INFO     | __main__:evaluate_case:96 - [T01] 开始评测: 查询未戴安全帽的告警
+2026-07-06 18:02:25.850 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询未戴安全帽的告警
+2026-07-06 18:02:30.013 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'event_type': 'ET03007'}}]
+2026-07-06 18:02:30.014 | INFO     | __main__:evaluate_case:157 - [T01] ✅ PASS
+2026-07-06 18:02:30.014 | INFO     | __main__:evaluate_case:96 - [T02] 开始评测: 查询吸烟告警
+2026-07-06 18:02:30.014 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询吸烟告警
+2026-07-06 18:02:32.316 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'event_type': 'ET03002'}}]
+2026-07-06 18:02:32.316 | INFO     | __main__:evaluate_case:157 - [T02] ✅ PASS
+2026-07-06 18:02:32.316 | INFO     | __main__:evaluate_case:96 - [T03] 开始评测: 查询跳舞的告警
+2026-07-06 18:02:32.316 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询跳舞的告警
+2026-07-06 18:02:57.060 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'direct_response', 'args': {'text': '平台不支持识别「跳舞」这类告警。当前平台支持的告警类型有：人脸识别(ET01001)、人员离岗(ET02001)、区域入侵(ET02002)、人员聚集(ET02003)、人员徘徊滞留(ET02004)、区域无人(ET02005)、人员跌倒(ET02006)、打瞌睡检测(ET02007)、未授权进入(ET02008)、打架(ET02009)、接打电话(ET03001)、违规抽烟(ET03002)、未穿工作服(ET03003)、未戴口罩(ET03004)、未戴护目镜(ET03005)、未戴安全带(ET03006)、未戴安全帽(ET03007)、未戴绝缘手套(ET03008)、使用手机(ET03009)、双人在岗卸货(ET03010)、人员攀爬(ET03011)、登高作业无人扶梯(ET03012)、穿工作服人员(ET03017)、明火(ET05001)、烟雾(ET05002)、灭火器(ET05003)。'}}]
+2026-07-06 18:02:57.060 | INFO     | __main__:evaluate_case:157 - [T03] ✅ PASS
+2026-07-06 18:02:57.060 | INFO     | __main__:evaluate_case:96 - [T04] 开始评测: 查询唱歌的告警
+2026-07-06 18:02:57.060 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询唱歌的告警
+2026-07-06 18:03:19.127 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'direct_response', 'args': {'text': '平台不支持识别「唱歌」这类告警。当前平台支持的告警类型有：人脸识别(ET01001)、人员离岗(ET02001)、区域入侵(ET02002)、人员聚集(ET02003)、人员徘徊滞留(ET02004)、区域无人(ET02005)、人员跌倒(ET02006)、打瞌睡检测(ET02007)、未授权进入(ET02008)、打架(ET02009)、接打电话(ET03001)、违规抽烟(ET03002)、未穿工作服(ET03003)、未戴口罩(ET03004)、未戴护目镜(ET03005)、未戴安全带(ET03006)、未戴安全帽(ET03007)、未戴绝缘手套(ET03008)、使用手机(ET03009)、双人在岗卸货(ET03010)、人员攀爬(ET03011)、登高作业无人扶梯(ET03012)、穿工作服人员(ET03017)、明火(ET05001)、烟雾(ET05002)、灭火器(ET05003)。'}}]
+2026-07-06 18:03:19.127 | INFO     | __main__:evaluate_case:157 - [T04] ✅ PASS
+2026-07-06 18:03:19.127 | INFO     | __main__:evaluate_case:96 - [T05] 开始评测: 查询未戴口罩的告警
+2026-07-06 18:03:19.127 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询未戴口罩的告警
+2026-07-06 18:03:21.276 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'event_type': 'ET03004'}}]
+2026-07-06 18:03:21.277 | INFO     | __main__:evaluate_case:157 - [T05] ✅ PASS
+2026-07-06 18:03:21.277 | INFO     | __main__:evaluate_case:96 - [T06] 开始评测: 查最近 5 条 AI 告警
+2026-07-06 18:03:21.277 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查最近 5 条 AI 告警
+2026-07-06 18:03:24.318 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'pageno': 1, 'pagesize': 5, 'recent': True}}]
+2026-07-06 18:03:24.319 | INFO     | __main__:evaluate_case:157 - [T06] ✅ PASS
+2026-07-06 18:03:24.319 | INFO     | __main__:evaluate_case:96 - [T07] 开始评测: 查最近 10 条告警
+2026-07-06 18:03:24.319 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查最近 10 条告警
+2026-07-06 18:03:27.300 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'pageno': 1, 'pagesize': 10, 'recent': True}}]
+2026-07-06 18:03:27.300 | INFO     | __main__:evaluate_case:157 - [T07] ✅ PASS
+2026-07-06 18:03:27.301 | INFO     | __main__:evaluate_case:96 - [T08] 开始评测: 统计每种告警类型数量
+2026-07-06 18:03:27.301 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 统计每种告警类型数量
+2026-07-06 18:03:29.690 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'aggregate_alarms', 'args': {'group_by': 'event_name'}}]
+2026-07-06 18:03:29.691 | INFO     | __main__:evaluate_case:157 - [T08] ✅ PASS
+2026-07-06 18:03:29.691 | INFO     | __main__:evaluate_case:96 - [T09] 开始评测: 查今天的告警
+2026-07-06 18:03:29.691 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查今天的告警
+2026-07-06 18:03:34.687 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'time_start': '2026-07-06 00:00:00', 'time_end': '2026-07-06 23:59:59'}}]
+2026-07-06 18:03:34.687 | INFO     | __main__:evaluate_case:157 - [T09] ✅ PASS
+2026-07-06 18:03:34.687 | INFO     | __main__:evaluate_case:96 - [T10] 开始评测: 查最近 7 天的告警
+2026-07-06 18:03:34.687 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查最近 7 天的告警
+2026-07-06 18:03:40.170 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'time_start': '2026-06-29 00:00:00', 'time_end': '2026-07-06 18:03:34'}}]
+2026-07-06 18:03:40.170 | INFO     | __main__:evaluate_case:157 - [T10] ✅ PASS
+2026-07-06 18:03:40.171 | INFO     | __main__:evaluate_case:96 - [T11] 开始评测: 统计每种告警类型数量并画柱状图
+2026-07-06 18:03:40.171 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 统计每种告警类型数量并画柱状图
+2026-07-06 18:03:46.025 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'aggregate_alarms', 'args': {'group_by': 'event_name'}}, {'task': 'visualize_alarms', 'args': {'data': '{{{step_0}}}', 'chart_type': 'bar', 'title': '告警类型分布'}}]
+2026-07-06 18:03:46.026 | INFO     | __main__:evaluate_case:157 - [T11] ✅ PASS
+2026-07-06 18:03:46.026 | INFO     | __main__:evaluate_case:96 - [T12] 开始评测: 按类型统计画饼图
+2026-07-06 18:03:46.026 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 按类型统计画饼图
+2026-07-06 18:03:51.611 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'aggregate_alarms', 'args': {'group_by': 'event_name'}}, {'task': 'visualize_alarms', 'args': {'data': '{{{step_0}}}', 'chart_type': 'pie', 'title': 'AI告警类型分布饼图'}}]
+2026-07-06 18:03:51.611 | INFO     | __main__:evaluate_case:157 - [T12] ✅ PASS
+2026-07-06 18:03:51.611 | INFO     | __main__:evaluate_case:96 - [T13] 开始评测: 统计告警并生成折线图
+2026-07-06 18:03:51.611 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 统计告警并生成折线图
+2026-07-06 18:03:57.705 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'aggregate_alarms', 'args': {'group_by': 'event_name'}}, {'task': 'visualize_alarms', 'args': {'data': '{{{step_0}}}', 'chart_type': 'line', 'title': '告警类型趋势折线图'}}]
+2026-07-06 18:03:57.705 | INFO     | __main__:evaluate_case:157 - [T13] ✅ PASS
+2026-07-06 18:03:57.705 | INFO     | __main__:evaluate_case:96 - [T14] 开始评测: 复判告警 abc-123-uuid 并回写状态
+2026-07-06 18:03:57.705 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 复判告警 abc-123-uuid 并回写状态
+2026-07-06 18:04:04.285 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'vlm_judge_alarm', 'args': {'alarm_uuid': 'abc-123-uuid'}}, {'task': 'update_alarm_status', 'args': {'alarm_uuid': 'abc-123-uuid', 'verdict': '{{{step_0.verdict}}}', 'note': 'VLM 自动复判'}}]
+2026-07-06 18:04:04.285 | INFO     | __main__:evaluate_case:157 - [T14] ✅ PASS
+2026-07-06 18:04:04.285 | INFO     | __main__:evaluate_case:96 - [T15] 开始评测: 未戴安全帽违反哪些规定
+2026-07-06 18:04:04.286 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 未戴安全帽违反哪些规定
+2026-07-06 18:04:04.286 | INFO     | graph.pre_router:pre_route:65 - [PreRouter] 命中知识库规则
+2026-07-06 18:04:04.286 | INFO     | graph.nodes:planner_node:441 - [Planner] 预路由命中: kb
+2026-07-06 18:04:04.286 | INFO     | __main__:evaluate_case:157 - [T15] ✅ PASS
+2026-07-06 18:04:04.286 | INFO     | __main__:evaluate_case:96 - [T16] 开始评测: 吸烟会被怎么处罚
+2026-07-06 18:04:04.286 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 吸烟会被怎么处罚
+2026-07-06 18:04:04.286 | INFO     | graph.pre_router:pre_route:65 - [PreRouter] 命中知识库规则
+2026-07-06 18:04:04.286 | INFO     | graph.nodes:planner_node:441 - [Planner] 预路由命中: kb
+2026-07-06 18:04:04.286 | INFO     | __main__:evaluate_case:157 - [T16] ✅ PASS
+2026-07-06 18:04:04.286 | INFO     | __main__:evaluate_case:96 - [T17] 开始评测: 你好
+2026-07-06 18:04:04.287 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 你好
+2026-07-06 18:04:04.287 | INFO     | graph.pre_router:pre_route:50 - [PreRouter] 命中闲聊规则: ^(你好|您好|hi|hello|嗨|hey)[\s！!。.？?]*$
+2026-07-06 18:04:04.287 | INFO     | graph.nodes:planner_node:441 - [Planner] 预路由命中: direct_response
+2026-07-06 18:04:04.287 | INFO     | __main__:evaluate_case:157 - [T17] ✅ PASS
+2026-07-06 18:04:04.287 | INFO     | __main__:evaluate_case:96 - [T18] 开始评测: 谢谢
+2026-07-06 18:04:04.287 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 谢谢
+2026-07-06 18:04:04.287 | INFO     | graph.pre_router:pre_route:50 - [PreRouter] 命中闲聊规则: ^(谢谢|多谢|感谢|thanks|thx)[\s！!。.]*$
+2026-07-06 18:04:04.287 | INFO     | graph.nodes:planner_node:441 - [Planner] 预路由命中: direct_response
+2026-07-06 18:04:04.287 | INFO     | __main__:evaluate_case:157 - [T18] ✅ PASS
+2026-07-06 18:04:04.287 | INFO     | __main__:evaluate_case:96 - [T19] 开始评测: 查 AI 摄像机列表
+2026-07-06 18:04:04.287 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查 AI 摄像机列表
+2026-07-06 18:04:05.779 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'video_device_list', 'args': {}}]
+2026-07-06 18:04:05.779 | INFO     | __main__:evaluate_case:157 - [T19] ✅ PASS
+2026-07-06 18:04:05.780 | INFO     | __main__:evaluate_case:96 - [T20] 开始评测: 查询视频设备
+2026-07-06 18:04:05.780 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查询视频设备
+2026-07-06 18:04:06.938 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'video_device_list', 'args': {}}]
+2026-07-06 18:04:06.939 | INFO     | __main__:evaluate_case:157 - [T20] ✅ PASS
+2026-07-06 18:04:06.939 | INFO     | __main__:evaluate_case:96 - [T21] 开始评测: 调出告警 xyz-456-uuid 前后录像
+2026-07-06 18:04:06.939 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 调出告警 xyz-456-uuid 前后录像
+2026-07-06 18:04:09.392 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'fetch_alarm_context', 'args': {'alarm_uuid': 'xyz-456-uuid'}}]
+2026-07-06 18:04:09.392 | INFO     | __main__:evaluate_case:157 - [T21] ✅ PASS
+2026-07-06 18:04:09.392 | INFO     | __main__:evaluate_case:96 - [T22] 开始评测: 统计抽烟和未戴安全帽各有多少
+2026-07-06 18:04:09.392 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 统计抽烟和未戴安全帽各有多少
+2026-07-06 18:04:13.564 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'event_type': 'ET03002'}}, {'task': 'ai_event_list', 'args': {'event_type': 'ET03007'}}]
+2026-07-06 18:04:13.564 | INFO     | __main__:evaluate_case:157 - [T22] ✅ PASS
+2026-07-06 18:04:13.564 | INFO     | __main__:evaluate_case:96 - [T23] 开始评测: 总共有多少条告警
+2026-07-06 18:04:13.564 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 总共有多少条告警
+2026-07-06 18:04:15.852 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'aggregate_alarms', 'args': {'group_by': 'event_name'}}]
+2026-07-06 18:04:15.852 | INFO     | __main__:evaluate_case:157 - [T23] ✅ PASS
+2026-07-06 18:04:15.852 | INFO     | __main__:evaluate_case:96 - [T24] 开始评测: 查跳广场舞的告警
+2026-07-06 18:04:15.853 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 查跳广场舞的告警
+2026-07-06 18:04:39.266 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'direct_response', 'args': {'text': '平台不支持识别「跳广场舞」这类告警。当前平台支持的告警类型有：人脸识别(ET01001)、人员离岗(ET02001)、区域入侵(ET02002)、人员聚集(ET02003)、人员徘徊滞留(ET02004)、区域无人(ET02005)、人员跌倒(ET02006)、打瞌睡检测(ET02007)、未授权进入(ET02008)、打架(ET02009)、接打电话(ET03001)、违规抽烟(ET03002)、未穿工作服(ET03003)、未戴口罩(ET03004)、未戴护目镜(ET03005)、未戴安全带(ET03006)、未戴安全帽(ET03007)、未戴绝缘手套(ET03008)、使用手机(ET03009)、双人在岗卸货(ET03010)、人员攀爬(ET03011)、登高作业无人扶梯(ET03012)、穿工作服人员(ET03017)、明火(ET05001)、烟雾(ET05002)、灭火器(ET05003)。'}}]
+2026-07-06 18:04:39.266 | INFO     | __main__:evaluate_case:157 - [T24] ✅ PASS
+2026-07-06 18:04:39.266 | INFO     | __main__:evaluate_case:96 - [T25] 开始评测: 有没有人打篮球的告警
+2026-07-06 18:04:39.266 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 有没有人打篮球的告警
+2026-07-06 18:05:02.184 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'direct_response', 'args': {'text': '平台不支持识别「打篮球」这类告警。当前平台支持的告警类型有：人脸识别(ET01001)、人员离岗(ET02001)、区域入侵(ET02002)、人员聚集(ET02003)、人员徘徊滞留(ET02004)、区域无人(ET02005)、人员跌倒(ET02006)、打瞌睡检测(ET02007)、未授权进入(ET02008)、打架(ET02009)、接打电话(ET03001)、违规抽烟(ET03002)、未穿工作服(ET03003)、未戴口罩(ET03004)、未戴护目镜(ET03005)、未戴安全带(ET03006)、未戴安全帽(ET03007)、未戴绝缘手套(ET03008)、使用手机(ET03009)、双人在岗卸货(ET03010)、人员攀爬(ET03011)、登高作业无人扶梯(ET03012)、穿工作服人员(ET03017)、明火(ET05001)、烟雾(ET05002)、灭火器(ET05003)。'}}]
+2026-07-06 18:05:02.185 | INFO     | __main__:evaluate_case:157 - [T25] ✅ PASS
+2026-07-06 18:05:02.185 | INFO     | __main__:evaluate_case:96 - [T26] 开始评测: 给我看最近20条告警
+2026-07-06 18:05:02.185 | INFO     | graph.nodes:planner_node:434 - [Planner] 开始规划任务，用户消息: 给我看最近20条告警
+2026-07-06 18:05:05.111 | INFO     | graph.nodes:planner_node:511 - [Planner] 生成计划（guided_json）: [{'task': 'ai_event_list', 'args': {'pageno': 1, 'pagesize': 20, 'recent': True}}]
+2026-07-06 18:05:05.111 | INFO     | __main__:evaluate_case:157 - [T26] ✅ PASS
+2026-07-06 18:05:05.112 | INFO     | __main__:main:325 - 报告已生成: /mnt/data3/clip/LangGraph/agent/eval/report_20260706_180505.md
+2026-07-06 18:05:05.112 | INFO     | __main__:main:338 - ✅ 无回退用例，退出码 0
+
+============================================================
+# Planner 层回归评测报告
+
+**生成时间**: 2026-07-06 18:05:05
+**用例总数**: 26
+**通过**: 26 / 26 (100.0%)
+**失败**: 0
+
+## 📊 与 Baseline 对比
+
+- 🔴 **回退** (pass→fail): 0 条
+- 🟢 **改进** (fail→pass): 0 条
+- ⚪ **保持**: 26 条
+- 🆕 **新增用例**: 0 条
+
+
+============================================================
+完整报告: /mnt/data3/clip/LangGraph/agent/eval/report_20260706_180505.md

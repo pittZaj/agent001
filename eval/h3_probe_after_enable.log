@@ -1,0 +1,33 @@
+2026-07-06 18:01:55.350 | INFO     | utils:load_config:19 - 配置已加载: /mnt/data3/clip/LangGraph/agent/config.yaml
+2026-07-06 18:01:59.507 | INFO     | __main__:run_probe:132 - ============================================================
+2026-07-06 18:01:59.507 | INFO     | __main__:run_probe:133 - Prefix Cache 命中率探针 (H0)
+2026-07-06 18:01:59.507 | INFO     | __main__:run_probe:134 - ============================================================
+2026-07-06 18:01:59.507 | INFO     | __main__:run_probe:139 - LLM 服务: http://127.0.0.1:8004/v1
+2026-07-06 18:01:59.507 | INFO     | __main__:build_realistic_planner_prompt:43 - [Probe] 正在构造真实规模 planner system_prompt...
+2026-07-06 18:01:59.507 | INFO     | __main__:build_realistic_planner_prompt:65 - [Probe] system_prompt 长度: 7653 字符 (~3826 tokens)
+2026-07-06 18:02:00.108 | INFO     | __main__:measure_single_request:85 - [Probe] === 第 1 轮请求 ===
+2026-07-06 18:02:00.108 | INFO     | __main__:measure_single_request:86 - [Probe] user_query: 查询未戴安全帽的告警
+2026-07-06 18:02:02.901 | INFO     | __main__:measure_single_request:110 - [Probe] 第 1 轮完成: TTFT=0.364s, 总耗时=2.792s
+2026-07-06 18:02:02.901 | DEBUG    | __main__:measure_single_request:111 - [Probe] 响应长度: 90 字符
+2026-07-06 18:02:03.901 | INFO     | __main__:measure_single_request:85 - [Probe] === 第 2 轮请求 ===
+2026-07-06 18:02:03.901 | INFO     | __main__:measure_single_request:86 - [Probe] user_query: 统计每种告警类型数量
+2026-07-06 18:02:06.217 | INFO     | __main__:measure_single_request:110 - [Probe] 第 2 轮完成: TTFT=0.142s, 总耗时=2.315s
+2026-07-06 18:02:06.217 | DEBUG    | __main__:measure_single_request:111 - [Probe] 响应长度: 94 字符
+2026-07-06 18:02:06.217 | INFO     | __main__:run_probe:173 - 
+2026-07-06 18:02:06.217 | INFO     | __main__:run_probe:174 - ============================================================
+2026-07-06 18:02:06.217 | INFO     | __main__:run_probe:175 - 📊 结果分析
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:176 - ============================================================
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:181 - 第 1 次请求 TTFT: 0.364s
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:182 - 第 2 次请求 TTFT: 0.142s
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:186 - TTFT 变化: +61.1% (0.142s vs 0.364s)
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:187 - 
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:191 - ✅ 推断：前缀缓存**可能已生效**（第二次 TTFT 显著下降 >20%）
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:192 -    → H1（稳定前缀前置）+ H3（vLLM 开启缓存）可能已落地
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:202 - 
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:203 - ============================================================
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:204 - 说明：
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:205 - - 本探针通过对比首 token 时延（TTFT）推断前缀缓存是否生效
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:206 - - 若 H1+H3 均已落地，稳定前缀命中缓存，第二次 prefill 应显著加速
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:207 - - 阈值 >20% 为强信号，5-20% 为弱信号，<5% 视为无变化
+2026-07-06 18:02:06.218 | INFO     | __main__:run_probe:208 - - 真实收益需结合业务场景多次测量取平均，本探针仅作快速验证
+2026-07-06 18:02:06.219 | INFO     | __main__:run_probe:209 - ============================================================
