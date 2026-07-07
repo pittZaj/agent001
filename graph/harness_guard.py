@@ -169,7 +169,7 @@ def needs_confirmation(task: dict, config: dict) -> GuardResult:
       对会修改生产数据的高风险工具（如 update_alarm_status / ai_event_deal）
       进行二次确认，防止误写不可逆。
 
-    确认逻辑（H7 实施时填充）：
+    确认逻辑：
       - 复判链路自动化（带 source="vlm_judge"）→ 放行 + 强制留痕
       - 用户直接指令回写（无 VLM 依据、无确认标志）→ deny（最小实现，交互式 interrupt 列待办）
 
@@ -181,9 +181,65 @@ def needs_confirmation(task: dict, config: dict) -> GuardResult:
       - GuardResult(allow=True): 放行（复判链路 / 已确认）
       - GuardResult(allow=False, action="ask", reason=...): 需要确认（H7 最小实现时等价 deny）
 
-    H5 实现：空壳放行（H7 时填充实际逻辑）
+    H7 实现：复判链路自动化放行 + 用户直接回写拦截 + 强制留痕
     """
-    # H5 骨架：默认放行，H7 时实现实际确认逻辑
+    # 读取配置：是否启用确认门 + 危险工具列表
+    harness_config = config.get("harness", {})
+    if not harness_config.get("confirm_dangerous_writes", True):
+        # 确认门开关关闭，直接放行（保持现网行为）
+        return GuardResult(allow=True)
+
+    dangerous_tools = set(harness_config.get("dangerous_tools", []))
+    tool_name = task.get("task", "")
+
+    # 非危险工具，直接放行
+    if tool_name not in dangerous_tools:
+        return GuardResult(allow=True)
+
+    # 危险工具：需进一步判断场景
+    args = task.get("args", {})
+
+    # 场景 1：复判链路自动化（带 source="vlm_judge"）
+    # Demo 2：vlm_judge → update_alarm_status，同一 plan 内 VLM 已给出 verdict+confidence
+    # 这是设计内的自动化流程，放行但强制留痕（审计日志在 executor 侧补充）
+    if args.get("source") == "vlm_judge":
+        logger.info(
+            f"[HARNESS-GUARD] needs_confirmation: 复判链路自动化 {tool_name}，"
+            f"带 source=vlm_judge，放行并留痕"
+        )
+        return GuardResult(allow=True)
+
+    # 场景 2：用户直接指令回写（无 VLM 依据）
+    # 本轮最小实现：要求显式确认标志 confirmed_by_user=true
+    # 未来可扩展为交互式 interrupt（LangGraph interrupt + Web 层回显确认按钮）
+    if not args.get("confirmed_by_user"):
+        # 构造友好话术：精确说明为什么拦截 + 如何绕过
+        alarm_uuid = args.get("alarm_uuid") or args.get("event_uuid") or "未知"
+        verdict = args.get("verdict") or "未知"
+        review_status = args.get("review_status") or "未知"
+
+        return GuardResult(
+            allow=False,
+            action="ask",
+            reason=(
+                f"⚠️ 安全护栏：即将执行危险回写操作\n\n"
+                f"工具：{tool_name}\n"
+                f"告警 UUID：{alarm_uuid}\n"
+                f"verdict：{verdict}\n"
+                f"review_status：{review_status}\n\n"
+                f"该操作会修改生产数据库的告警状态，不可逆。\n\n"
+                f"**建议**：\n"
+                f"1. 在复判链路中执行（先用 vlm_judge_alarm 复判，再自动回写）\n"
+                f"2. 如需直接回写，请确认操作无误后重试\n\n"
+                f"**注**：真正的交互式确认需 Web 层配合（待实施）。"
+            )
+        )
+
+    # 场景 3：带显式确认标志，放行
+    logger.info(
+        f"[HARNESS-GUARD] needs_confirmation: 危险回写 {tool_name}，"
+        f"带 confirmed_by_user=true，放行并留痕"
+    )
     return GuardResult(allow=True)
 
 

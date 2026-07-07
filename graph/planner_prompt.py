@@ -86,7 +86,7 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
 [
   {{"task": "ai_event_list", "args": {{"pageno": 1, "pagesize": 5}}}},
   {{"task": "vlm_judge_alarm", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}"}}}},
-  {{"task": "update_alarm_status", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}", "verdict": "{{{{step_1.verdict}}}}", "note": "VLM 自动复判"}}}}
+  {{"task": "update_alarm_status", "args": {{"alarm_uuid": "{{{{step_0.events.0.uuid}}}}", "verdict": "{{{{step_1.verdict}}}}", "note": "VLM 自动复判", "source": "vlm_judge"}}}}
 ]
 
 # 常见任务模板（语义区分：统计全量 vs 查看样本/最近N条）
@@ -95,7 +95,7 @@ def build_stable_prefix(tools_text: str, catalog_text: str, catalog_names: str) 
    {{"task":"visualize_alarms","args":{{"data":"{{{{step_0}}}}","chart_type":"<用户指定:bar/line/pie>","title":"告警类型分布"}}}}]
 - "复判告警 <UUID> 并回写状态"：
   [{{"task":"vlm_judge_alarm","args":{{"alarm_uuid":"<UUID>"}}}},
-   {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}"}}}}]
+   {{"task":"update_alarm_status","args":{{"alarm_uuid":"<UUID>","verdict":"{{{{step_0.verdict}}}}","source":"vlm_judge"}}}}]
 - "查最近/前 N 条 AI 告警"（⚠️ 重要：这是"查看样本"而非"统计全量"）：
   · 传 `pagesize=N`, `recent=true`（显式标志，触发客户端按 created_at 降序排序 + 截断前 N）
   · T6 已完成客户端排序兜底：真实平台虽不支持排序参数，但客户端会全量拉取后排序，保证返回真正最新的 N 条

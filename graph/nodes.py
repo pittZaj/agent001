@@ -770,6 +770,23 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     plan[idx]["status"] = "completed" if result.get("success") else "failed"
     plan[idx]["result"] = result
 
+    # H7 审计日志：危险工具执行后强制留痕
+    if is_guard_enabled(CONFIG):
+        dangerous_tools = set(CONFIG.get("harness", {}).get("dangerous_tools", []))
+        if task["task"] in dangerous_tools:
+            # 危险工具执行后，记录审计日志
+            status_str = "成功" if result.get("success") else "失败"
+            args_summary = {
+                "alarm_uuid": args.get("alarm_uuid") or args.get("event_uuid"),
+                "verdict": args.get("verdict"),
+                "review_status": args.get("review_status"),
+                "source": args.get("source"),
+                "confirmed_by_user": args.get("confirmed_by_user"),
+            }
+            logger.warning(
+                f"[HARNESS-GUARD] 危险回写审计 {task['task']} {status_str}：{args_summary}"
+            )
+
     tool_results = state.get("tool_results", [])
     tool_results.append(result)
 
