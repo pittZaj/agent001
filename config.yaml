@@ -28,6 +28,17 @@ llm:
   prefix_cache_friendly: true
   temperature: 0.2
   timeout: 60
+harness:
+  # 护栏总开关（H5-H8）—— 反馈控制层：行动前拦截 + 行动后核对
+  # true=启用护栏（默认，推荐）；false=关闭全部护栏（等价现网行为，用于回滚）
+  guard_enabled: true
+  # 危险回写确认门开关（H7）—— 对会修改生产数据的工具进行二次确认
+  # true=启用确认门（默认）；false=关闭确认门（复判链路等自动化场景仍正常）
+  confirm_dangerous_writes: true
+  # 需二次确认的高风险工具列表（回写生产库）
+  dangerous_tools:
+    - update_alarm_status  # 本地 skill 包装，内部调 ai_event_deal
+    - ai_event_deal        # MCP 工具，直接回写 review_status
 logging:
   format: '<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level>
     | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>'

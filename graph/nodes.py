@@ -11,6 +11,7 @@ from utils import CONFIG
 from skills import get_skill_registry
 from graph.streaming import emit_status, stream_llm, tool_label, emit_token_chunked
 from graph.memory import history_prompt_block
+from graph.harness_guard import check_plan, needs_confirmation, check_result, is_guard_enabled, log_guard_action
 
 
 # T1：Plan 的 JSON Schema（guided_json 约束，确保 planner 必出合法任务数组）
@@ -534,6 +535,25 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
         # 统一后处理（两条路径汇合）
         plan = _normalize_alarm_plan(plan, state["user_message"], state.get("messages", []))
+
+        # H6 挂载点：行动前 plan 硬校验（H5 骨架默认放行，H6 实施时填充实际逻辑）
+        if is_guard_enabled(CONFIG):
+            guard_result = check_plan(plan, registry)
+            log_guard_action(guard_result, context="planner_node:check_plan")
+
+            if not guard_result.allow:
+                # 拦截：返回友好话术
+                logger.warning(f"[Planner] plan 被护栏拦截: {guard_result.reason}")
+                return {
+                    "plan": [{"task": "direct_response", "args": {"text": guard_result.reason}, "status": "denied"}],
+                    "current_task_idx": 0,
+                }
+
+            # 自动修正：使用修正后的 plan
+            if guard_result.fixed_plan is not None:
+                logger.info(f"[Planner] plan 被护栏自动修正")
+                plan = guard_result.fixed_plan
+
         _tasks = [t.get("task", "") for t in plan]
         if _tasks and _tasks != ["direct_response"] and _tasks != ["stream_chat"]:
             emit_status("planned", "已规划 " + str(len(_tasks)) + " 个步骤："
@@ -625,6 +645,31 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     step_outputs = state.get("step_outputs", {})
 
     args = _resolve_step_references(args, step_outputs, idx)
+
+    # H7 挂载点：危险回写确认门（H5 骨架默认放行，H7 实施时填充实际逻辑）
+    if is_guard_enabled(CONFIG):
+        guard_result = needs_confirmation(task, CONFIG)
+        log_guard_action(guard_result, context=f"executor_node:needs_confirmation[{task['task']}]")
+
+        if not guard_result.allow:
+            # 拦截：跳过该步，返回安全提示
+            logger.warning(f"[Executor] 危险操作被护栏拦截: {task['task']} - {guard_result.reason}")
+            result = {
+                "success": False,
+                "tool": task["task"],
+                "error": f"[安全护栏] {guard_result.reason}"
+            }
+            # 更新任务状态并返回（跳过实际执行）
+            plan[idx]["status"] = "blocked"
+            plan[idx]["result"] = result
+            tool_results = state.get("tool_results", [])
+            tool_results.append(result)
+            return {
+                "plan": plan,
+                "current_task_idx": idx + 1,
+                "tool_results": tool_results,
+                "step_outputs": step_outputs,
+            }
 
     # 通过 Skill Registry 调用
     registry = get_skill_registry()
@@ -2051,6 +2096,19 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
 
     # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
     # 绝不能让下游 LLM 凭空编造无关告警（修复"打电话/跳舞也返回数据"的幻觉问题）。
+    # H8 挂载点：行动后统一核对（H5 骨架默认放行，H8 实施时收敛现有守卫逻辑）
+    if is_guard_enabled(CONFIG):
+        for r in tool_results:
+            if r.get("success") and r.get("tool"):
+                guard_result = check_result(r.get("tool"), r.get("result", {}), CONFIG)
+                log_guard_action(guard_result, context=f"formatter_node:check_result[{r.get('tool')}]")
+
+                if not guard_result.allow:
+                    # 命中空结果/错误：走确定性分支，不进 LLM
+                    logger.info(f"[Formatter] 后置核对命中: {r.get('tool')} - {guard_result.reason}")
+                    # H8 实施时会在这里添加确定性分支逻辑
+                    # H5 阶段：护栏默认放行，原有守卫逻辑继续生效
+
     _ev_results = [
         r for r in tool_results
         if r.get("success") and r.get("tool") == "ai_event_list"
