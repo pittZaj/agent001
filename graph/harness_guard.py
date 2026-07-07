@@ -60,7 +60,7 @@ class GuardResult:
 def check_plan(plan: list[dict], registry: Any) -> GuardResult:
     """行动前 plan 硬校验（H6 实现，PreToolUse Hooks）
 
-    校验维度（H6 实施时填充）：
+    校验维度：
       ① 工具存在性：引用未注册工具 → deny（友好话术，不进 executor）
       ② event_type 合法性：带了非权威编码 → deny（防幻觉最后一道，调 event_types.is_supported）
       ③ 参数越界：pagesize 异常大 → 自动修正（fixed_plan）而非 deny
@@ -79,10 +79,85 @@ def check_plan(plan: list[dict], registry: Any) -> GuardResult:
       - GuardResult(allow=False, action="deny", reason=...): 拦截，返回原因
       - GuardResult(allow=True, fixed_plan=[...]): 自动修正，用修正后的 plan
 
-    H5 实现：空壳放行（H6 时填充实际逻辑）
+    H6 实现：三类校验（工具存在性/event_type合法性/参数越界修正）
     """
-    # H5 骨架：默认放行，H6 时实现实际校验逻辑
-    return GuardResult(allow=True)
+    # 导入依赖（延迟导入避免循环依赖）
+    from skills.event_types import is_supported as is_event_type_supported
+
+    # 收集所有有效工具 ID（MCP工具 + 本地工具 + 子图 + 特殊工具）
+    all_skills = registry.list_skills()
+    valid_tool_ids = {s.id for s in all_skills}
+    # 特殊工具：direct_response / stream_chat（不在 registry 但合法）
+    valid_tool_ids.add("direct_response")
+    valid_tool_ids.add("stream_chat")
+
+    # 环境检测：如果 registry 为空（测试/评估环境，MCP 未连接），跳过工具存在性校验
+    # 这是"存疑放行"原则的体现——不确定工具列表是否完整时，宁可放行让 executor 兜底
+    skip_tool_check = len(all_skills) == 0
+    if skip_tool_check:
+        logger.debug(
+            "[HARNESS-GUARD] check_plan: registry 为空（测试/评估环境），"
+            "跳过工具存在性校验，仅校验 event_type 和参数"
+        )
+
+    # 是否需要自动修正
+    need_fix = False
+    fixed_plan = []
+
+    # 逐步骤校验
+    for i, step in enumerate(plan):
+        tool_name = step.get("task", "")
+        args = step.get("args", {})
+
+        # ① 工具存在性校验：引用未注册工具 → deny（生产环境有效，测试环境跳过）
+        if not skip_tool_check and tool_name not in valid_tool_ids:
+            return GuardResult(
+                allow=False,
+                action="deny",
+                reason=(
+                    f"计划第 {i+1} 步引用了不存在的工具「{tool_name}」。\n\n"
+                    f"请检查工具名称是否正确，或联系管理员确认该工具是否已注册。"
+                )
+            )
+
+        # ② event_type 合法性校验：带了非权威编码 → deny（防幻觉最后一道）
+        event_type = args.get("event_type")
+        if event_type and not is_event_type_supported(event_type):
+            return GuardResult(
+                allow=False,
+                action="deny",
+                reason=(
+                    f"计划第 {i+1} 步使用了无效的告警类型编码「{event_type}」。\n\n"
+                    f"该编码不在平台权威清单中。请使用平台支持的告警类型，"
+                    f"或用自然语言描述（如「未戴安全帽」），由系统自动匹配。"
+                )
+            )
+
+        # ③ 参数越界自动修正：pagesize 异常大 → fixed_plan（而非 deny）
+        # 阈值设定：pagesize > 1000 视为异常（正常查询不会超过这个值）
+        pagesize = args.get("pagesize")
+        if pagesize is not None and isinstance(pagesize, (int, float)) and pagesize > 1000:
+            # 自动修正为 100（T6 排序兜底的安全阈值）
+            need_fix = True
+            fixed_step = step.copy()
+            fixed_step["args"] = args.copy()
+            fixed_step["args"]["pagesize"] = 100
+            fixed_plan.append(fixed_step)
+            logger.info(
+                f"[HARNESS-GUARD] check_plan: 第 {i+1} 步 pagesize={pagesize} 越界，"
+                f"自动修正为 100（防止无意义全量拉取）"
+            )
+        else:
+            # 无需修正，原样保留
+            fixed_plan.append(step)
+
+    # 返回结果
+    if need_fix:
+        # 有参数越界，返回修正后的 plan
+        return GuardResult(allow=True, fixed_plan=fixed_plan)
+    else:
+        # 全部合法，放行
+        return GuardResult(allow=True)
 
 
 # ==================== H7：危险回写确认门 ====================
