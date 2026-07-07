@@ -1,61 +1,47 @@
-"""Harness 护栏层 —— 反馈控制的工程实现（H5-H8）
+"""Harness 护栏模块（反馈控制工程实现）
 
-职责：
-  - 行动前校验：plan 合法性（H6）/ 危险回写确认（H7）
-  - 行动后核对：结果一致性（H8）
+统一的行动前后校验入口，对应《从 Harness 架构到 Token 经济学的探索》中的 PreToolUse / PostToolUse Hooks。
 
-设计原则：
-  - 纯函数 + 明确返回结构（GuardResult）
-  - 不改变正常路径，只在命中风险时 deny/ask
-  - 可通过 config.yaml 的 harness.guard_enabled 总开关控制
-  - 遵循"负反馈增益 < 1"：只拦明确非法，存疑放行
+核心设计：
+  - GuardResult 统一返回结构（allow / action / reason / fixed_plan）
+  - check_plan：行动前 plan 硬校验（H6）
+  - needs_confirmation：危险回写确认门（H7）
+  - check_result：行动后统一核对（H8）
 
-对应理论：
-  文章《从 Harness 架构到 Token 经济学的探索》Part 1-2 控制论双环：
-  - 前馈控制（开环）：planner_prompt 防幻觉规则 + event_types 权威字典
-  - 反馈控制（闭环）：PreToolUse 拦截（H6/H7）+ PostToolUse 核对（H8）
-
-实施记录：
-  - H5 (2026-07-07)：护栏骨架，三个空实现函数
-  - H6 (待实施)：check_plan 实现（工具存在性/event_type 合法性/参数越界）
-  - H7 (待实施)：needs_confirmation 实现（危险回写确认门）
-  - H8 (待实施)：check_result 实现（后置核对收敛）
+职责边界：
+  - 只对**明确非法**的 deny/ask（工具不存在、编码非法、危险回写无确认）
+  - 对**可修正**的走 fixed_plan 自动纠偏（参数越界）
+  - 对**存疑**的一律放行（避免过度拦截，负反馈增益 < 1）
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 from loguru import logger
 
 
+# ==================== 数据结构 ====================
+
 @dataclass
 class GuardResult:
-    """护栏判定结果（统一返回结构）
+    """护栏函数统一返回结构
 
-    字段说明：
-      - allow: 是否放行（True=继续执行，False=拦截）
-      - action: 动作类型（"allow" / "deny" / "ask"）
-          * allow：放行，正常执行
-          * deny：拒绝，直接跳过该操作（返回友好提示）
-          * ask：需要用户确认（暂未实现交互式 interrupt，H7 最小实现时等价 deny）
-      - reason: 拦截原因（action != "allow" 时填写，用于日志和用户提示）
-      - fixed_plan: 可自动修正时给出修正后的 plan（仅 check_plan 使用）
+    字段：
+      - allow: bool，是否放行（默认 True）
+      - action: str，护栏动作（"allow" / "deny" / "ask"）
+      - reason: str，拦截原因（仅在 deny/ask 时有值）
+      - fixed_plan: Optional[list]，自动修正后的 plan（仅 check_plan 使用）
 
-    典型用法：
-      ```python
-      result = check_plan(plan, registry)
-      if not result.allow:
-          # 拦截：返回友好话术或记录日志
-          logger.warning(f"[Guard] {result.action}: {result.reason}")
-          return fallback_response(result.reason)
-      # 放行：继续正常流程
-      ```
+    设计说明：
+      - allow 是最核心的判定（True=放行，False=拦截）
+      - action 细化拦截类型："deny"直接拦截，"ask"需要确认（H7 最小实现时等价 deny）
+      - fixed_plan 用于参数越界自动修正（如 pagesize 过大修正为 100）
     """
     allow: bool = True
     action: str = "allow"  # "allow" / "deny" / "ask"
     reason: str = ""
-    fixed_plan: Optional[list[dict]] = None
+    fixed_plan: Optional[list] = None
 
 
-# ==================== H6：行动前 plan 硬校验 ====================
+# ==================== H6：plan 行动前硬校验 ====================
 
 def check_plan(plan: list[dict], registry: Any) -> GuardResult:
     """行动前 plan 硬校验（H6 实现，PreToolUse Hooks）
@@ -252,7 +238,7 @@ def check_result(tool: str, result: dict, config: dict) -> GuardResult:
       收敛现有分散的后置核对逻辑（空结果守卫 / isError 处理），
       作为统一入口，降低"新增工具漏挂核对"风险。
 
-    核对维度（H8 实施时填充）：
+    核对维度：
       - 空结果守卫：查询类工具返回 total=0 / events=[] → 确定性分支（如实告知无数据，不进 LLM）
       - isError 识别：MCP 返回 {"error": ...} → 错误分支
       - 其他异常情况收敛
@@ -270,9 +256,43 @@ def check_result(tool: str, result: dict, config: dict) -> GuardResult:
       - GuardResult(allow=True): 结果正常，进入 LLM formatter
       - GuardResult(allow=False, action="deny", reason=...): 命中空结果/错误，走确定性分支
 
-    H5 实现：空壳放行（H8 时填充实际逻辑）
+    H8 实现：收敛空结果守卫 + isError 识别
     """
-    # H5 骨架：默认放行，H8 时实现实际核对逻辑
+    # ① isError 识别：MCP call_tool 错误返回
+    if "error" in result:
+        error_msg = result.get("error", "未知错误")
+        return GuardResult(
+            allow=False,
+            action="deny",
+            reason=f"工具执行失败：{error_msg}"
+        )
+
+    # ② 空结果守卫（查询类工具）
+    # ai_event_list：total=0 且 events=[] → 空结果
+    if tool == "ai_event_list":
+        total = result.get("total", 0)
+        events = result.get("events", [])
+        if total == 0 and not events:
+            return GuardResult(
+                allow=False,
+                action="deny",
+                reason="ai_event_list 返回空结果（total=0, events=[]）"
+            )
+
+    # aggregate_alarms：total=0 且 data=[] → 空结果
+    if tool == "aggregate_alarms":
+        total = result.get("total", 0)
+        data = result.get("data", [])
+        if total == 0 and not data:
+            return GuardResult(
+                allow=False,
+                action="deny",
+                reason="aggregate_alarms 返回空结果（total=0, data=[]）"
+            )
+
+    # ③ 其他工具：默认放行
+    # 未覆盖的工具类型默认放行，进入 LLM formatter
+    # 扩展新查询类工具的空结果守卫时，在上面添加相应判断
     return GuardResult(allow=True)
 
 
@@ -301,3 +321,57 @@ def log_guard_action(result: GuardResult, context: str = ""):
         logger.warning(f"[HARNESS-GUARD] {context}: deny - {result.reason}")
     elif result.action == "ask":
         logger.info(f"[HARNESS-GUARD] {context}: ask - {result.reason}")
+
+
+# ==================== H8：启动期自检 ====================
+
+def self_check_result_coverage(registry: Any, config: dict):
+    """启动期自检：检查注册的查询类工具是否被 check_result 覆盖
+
+    目的：降低"新增工具漏挂核对"风险（对齐方向三 T7 的自检思路）
+
+    检查逻辑：
+      - 列出所有以 ai_/aggregate_/list_/query_ 开头的工具（查询类特征）
+      - 检查 check_result 函数中是否覆盖该工具
+      - 未覆盖的工具打 WARNING 日志
+
+    注意：
+      - 这是启发式检查，提醒开发者注意，不是强制拦截
+      - 真实环境（MCP 连接）才有实际工具列表，测试环境跳过
+    """
+    if not is_guard_enabled(config):
+        return  # 护栏关闭，跳过自检
+
+    # check_result 已覆盖的工具（硬编码，与实现同步）
+    covered_tools = {"ai_event_list", "aggregate_alarms"}
+
+    # 查询类工具的命名模式（启发式）
+    query_patterns = ["ai_", "aggregate_", "list_", "query_", "search_", "fetch_", "get_"]
+
+    # 收集注册的查询类工具
+    all_skills = registry.list_skills()
+    if not all_skills:
+        # 测试/评估环境，registry 为空，跳过自检
+        logger.debug("[HARNESS-GUARD] check_result 覆盖自检：registry 为空，跳过")
+        return
+
+    query_tools = []
+    for skill in all_skills:
+        tool_id = skill.id
+        # 检查是否匹配查询类命名模式
+        if any(tool_id.startswith(p) for p in query_patterns):
+            query_tools.append(tool_id)
+
+    # 检查覆盖情况
+    uncovered = [t for t in query_tools if t not in covered_tools]
+
+    if uncovered:
+        logger.warning(
+            f"[HARNESS-GUARD] check_result 未覆盖以下查询类工具（可能需要空结果守卫）：{uncovered}\n"
+            f"  已覆盖：{sorted(covered_tools)}\n"
+            f"  如需扩展空结果守卫，请在 harness_guard.check_result 中添加相应判断"
+        )
+    else:
+        logger.debug(
+            f"[HARNESS-GUARD] check_result 覆盖检查通过，已覆盖查询类工具：{sorted(covered_tools)}"
+        )

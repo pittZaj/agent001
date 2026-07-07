@@ -435,6 +435,13 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"[Planner] 开始规划任务，用户消息: {state['user_message']}")
     emit_status("planning", "正在理解你的问题并规划任务…")
 
+    # H8 启动期自检：检查查询类工具是否被 check_result 覆盖（只执行一次）
+    if not hasattr(planner_node, "_self_check_done"):
+        from graph.harness_guard import self_check_result_coverage
+        registry = get_skill_registry()
+        self_check_result_coverage(registry, CONFIG)
+        planner_node._self_check_done = True
+
     # 预路由：仅闲聊/纯规章走快路径；录像/告警/设备等统一由 Planner 解析
     from graph.pre_router import pre_route
     fast_result = pre_route(state["user_message"])
@@ -2111,9 +2118,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
             emit_token_chunked(_list_text)
             return {"final_response": _list_text}
 
-    # 空结果守卫：ai_event_list 查到 0 条时，必须如实告知"无数据"，
-    # 绝不能让下游 LLM 凭空编造无关告警（修复"打电话/跳舞也返回数据"的幻觉问题）。
-    # H8 挂载点：行动后统一核对（H5 骨架默认放行，H8 实施时收敛现有守卫逻辑）
+    # H8 挂载点：行动后统一核对（H8 实施时收敛现有守卫逻辑）
     if is_guard_enabled(CONFIG):
         for r in tool_results:
             if r.get("success") and r.get("tool"):
@@ -2123,8 +2128,10 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
                 if not guard_result.allow:
                     # 命中空结果/错误：走确定性分支，不进 LLM
                     logger.info(f"[Formatter] 后置核对命中: {r.get('tool')} - {guard_result.reason}")
-                    # H8 实施时会在这里添加确定性分支逻辑
-                    # H5 阶段：护栏默认放行，原有守卫逻辑继续生效
+                    # H8 实施：根据 reason 判断类型，调用现有守卫生成确定性文案
+                    # 空结果：复用下方现有的空结果守卫逻辑（ai_event_list / aggregate_alarms）
+                    # 这里不直接返回，让代码继续走到下方现有守卫，保持逻辑一致性
+                    # check_result 的作用是"统一入口 + 文档化约定"，实际文案生成仍复用现有代码
 
     _ev_results = [
         r for r in tool_results
