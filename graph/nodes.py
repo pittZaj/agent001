@@ -85,7 +85,13 @@ def _format_skills_compact(skills) -> str:
 
 
 def _format_skills_grouped(skills) -> str:
-    """按真实平台分类组织工具描述（ai_*/video_*/system_* / 本地分析 / 子图）"""
+    """按真实平台分类组织工具描述（ai_*/video_*/system_* / 本地分析 / 子图）
+
+    Token 优化策略：
+    - 仅保留工具名 + 核心描述（≤80字符）
+    - 移除详细参数列表（节省 ~3000 tokens）
+    - planner_prompt.py 的工具选择指引已足够指导 LLM 选择正确工具
+    """
     groups: dict[str, list] = {
         "AI 视觉告警 (ai_*)": [],
         "视频设备与录像 (video_*)": [],
@@ -114,14 +120,9 @@ def _format_skills_grouped(skills) -> str:
             continue
         lines.append(f"\n## {title}")
         for s in items:
-            params = s.parameters.get("properties", {}) if isinstance(s.parameters, dict) else {}
-            param_desc = ", ".join([
-                f"{k}: {v.get('description', v.get('type', 'any'))}"
-                for k, v in list(params.items())[:6]  # 截断长 schema
-            ])
-            lines.append(f"- `{s.id}` — {s.description}")
-            if param_desc:
-                lines.append(f"   参数: {{{param_desc}}}")
+            # 精简描述：截断到 80 字符，移除参数列表
+            desc = s.description[:80] + "..." if len(s.description) > 80 else s.description
+            lines.append(f"- `{s.id}` — {desc}")
     return "\n".join(lines)
 
 
@@ -502,6 +503,24 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             SystemMessage(content=system_prompt),
             HumanMessage(content=history_block + "\n# 本轮用户问题\n" + state["user_message"]),
         ]
+
+    # DEBUG: 输出 token 统计信息
+    try:
+        import tiktoken
+        enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        system_tokens = enc.encode(system_prompt)
+        tools_tokens = enc.encode(tools_text)
+        catalog_tokens = enc.encode(catalog_text)
+        user_tokens = enc.encode(state["user_message"])
+        history_tokens = enc.encode(history_block) if history_block else []
+        total_tokens = len(system_tokens) + len(user_tokens) + len(history_tokens)
+        logger.info(f"[Planner] Token 统计: system={len(system_tokens)}, tools={len(tools_tokens)}, "
+                   f"catalog={len(catalog_tokens)}, user={len(user_tokens)}, history={len(history_tokens)}, "
+                   f"total={total_tokens}")
+        if total_tokens > 8000:
+            logger.warning(f"[Planner] Token 总数 {total_tokens} 接近或超过 8192 限制！")
+    except Exception as debug_e:
+        logger.debug(f"[Planner] Token 统计失败: {debug_e}")
 
     try:
         # T1：结构化输出（guided_json）—— 让 LLM 必出合法 JSON 数组，省去正则解析
