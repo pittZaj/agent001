@@ -39,6 +39,10 @@ harness:
   dangerous_tools:
     - update_alarm_status  # 本地 skill 包装，内部调 ai_event_deal
     - ai_event_deal        # MCP 工具，直接回写 review_status
+  # 能力边界护栏开关（2026-07-09）—— 区分"平台能做"与"平台暂不支持"
+  # true=启用（默认）：拦截未来时刻录像 + 录像按内容检索追加"暂不支持"说明
+  # false=关闭：回退旧行为（静默丢弃非法子诉求）
+  capability_guard_enabled: true
 logging:
   format: '<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level>
     | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>'

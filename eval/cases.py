@@ -234,6 +234,16 @@ EVAL_CASES = [
         forbid_args_keys={0: ["time_start", "time_end"]},
         tag="发散-最近N条",
     ),
+
+    # ===== 14. 能力边界护栏（2026-07-09）：非法诉求裹在合理诉求里 =====
+    # 查未来时刻录像逻辑上不可能满足 → 能力边界护栏前置硬拦截为 direct_response。
+    EvalCase(
+        id="T27",
+        query="查看门口明天9点的录像",  # 未来时刻录像 → 硬拦截（capability_guard）
+        expect_tools=["direct_response"],
+        must_be_direct_response=True,
+        tag="能力边界-未来录像",
+    ),
 ]
 
 

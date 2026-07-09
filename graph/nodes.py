@@ -12,6 +12,7 @@ from skills import get_skill_registry
 from graph.streaming import emit_status, stream_llm, tool_label, emit_token_chunked
 from graph.memory import history_prompt_block
 from graph.harness_guard import check_plan, needs_confirmation, check_result, is_guard_enabled, log_guard_action
+from graph.capability_guard import is_capability_guard_enabled
 
 
 # T1：Plan 的 JSON Schema（guided_json 约束，确保 planner 必出合法任务数组）
@@ -452,6 +453,18 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             "plan": fast_result["plan"],
             "current_task_idx": 0,
         }
+
+    # 能力边界护栏（前置硬拦截）：查"未来时刻"录像逻辑上不可能满足，
+    # 直接给确定性说明并 return，省去 ~7000 token 大提示词构建（对齐 Context Length 优化）。
+    from graph.capability_guard import check_future_record
+    if is_capability_guard_enabled(CONFIG):
+        _future_hint = check_future_record(state["user_message"])
+        if _future_hint:
+            logger.info("[Planner] 能力边界护栏命中：未来时刻录像，硬拦截")
+            return {
+                "plan": [{"task": "direct_response", "args": {"text": _future_hint}, "status": "denied"}],
+                "current_task_idx": 0,
+            }
 
     # 从 Skill Registry 获取可用工具，按平台分类组织
     registry = get_skill_registry()
@@ -1456,8 +1469,18 @@ def _format_video_play_record_response(user_message: str, tool_result: dict) -> 
     if not isinstance(result, dict):
         return None
 
+    # 能力边界护栏（软降级）：用户若要求按画面内容（有人/有车/某行为）筛录像，
+    # 平台暂不支持该检索维度，此处照常返回录像但显式追加说明，避免"结果不准"错觉。
+    _notice = None
+    if is_capability_guard_enabled(CONFIG):
+        from graph.capability_guard import content_retrieval_notice
+        _notice = content_retrieval_notice(user_message)
+
+    def _with_notice(text: str) -> str:
+        return f"{_notice}\n\n{text}" if _notice else text
+
     if not result.get("matched"):
-        return result.get("message") or "录像回放启动失败，请确认该时间点是否有录像。"
+        return _with_notice(result.get("message") or "录像回放启动失败，请确认该时间点是否有录像。")
 
     title = _format_device_channel_title(result, "摄像机")
     play_at = result.get("play_at") or ""
@@ -1493,7 +1516,7 @@ def _format_video_play_record_response(user_message: str, tool_result: dict) -> 
     else:
         lines.append("\n未获取到有效通道，请检查摄像机名称。")
 
-    return "\n".join(lines)
+    return _with_notice("\n".join(lines))
 
 
 def _strip_om_route_prefix(path: str) -> str:
